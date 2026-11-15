@@ -6465,6 +6465,40 @@ fn adding_content_through_tools() {
     assert!(matches!(a.call("content_delete", &json!({ "doc": doc, "page": 1, "index": 5 })), Err(ToolError::Failed(_))));
 }
 
+/// Thai edition: a text box splits into its lines, and a line into its words at spaces, each
+/// where it was; one undo step each; an image or a box of one piece is refused.
+#[test]
+fn a_text_box_splits_through_tools() {
+    let dir = workdir("content-split");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(
+        &mut a,
+        "page_add_text",
+        json!({ "doc": doc, "page": 1, "text": "Name...... Age......
+Town......", "at": [20, 20] }),
+    );
+    ok(&mut a, "page_add_text", json!({ "doc": doc, "page": 1, "text": "Alone", "at": [20, 200] }));
+    ok(&mut a, "content_split", json!({ "doc": doc, "page": 1, "index": 1 }));
+    let list = ok(&mut a, "content_list", json!({ "doc": doc }));
+    let texts: Vec<&str> = list["items"].as_array().unwrap().iter().filter_map(|i| i["text"].as_str()).collect();
+    assert_eq!(texts, ["Alone", "Name...... Age......", "Town......"], "{list}");
+    ok(&mut a, "content_split", json!({ "doc": doc, "page": 1, "index": 2, "at": "spaces" }));
+    let list = ok(&mut a, "content_list", json!({ "doc": doc }));
+    let items = list["items"].as_array().unwrap();
+    let texts: Vec<&str> = items.iter().filter_map(|i| i["text"].as_str()).collect();
+    assert_eq!(texts, ["Alone", "Town......", "Name......", "Age......"], "{list}");
+    let left = |t: &str| items.iter().find(|i| i["text"] == t).unwrap()["rect"][0].as_f64().unwrap();
+    assert!(left("Name......") < left("Age......"), "left to right where they were");
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(ok(&mut a, "content_list", json!({ "doc": doc }))["count"], 3, "one step");
+    assert!(
+        matches!(a.call("content_split", &json!({ "doc": doc, "page": 1, "index": 1, "at": "spaces" })), Err(ToolError::InvalidArgs(_))),
+        "one word"
+    );
+    assert!(matches!(a.call("content_split", &json!({ "doc": doc, "page": 1, "index": 1, "at": "words" })), Err(ToolError::InvalidArgs(_))));
+}
+
 /// Added text can be underlined, and it reads back (#4236).
 #[test]
 fn added_text_underline_through_tools() {

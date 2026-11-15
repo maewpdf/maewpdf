@@ -2206,6 +2206,18 @@ evidence = ["crates/edit/src/tests.rs::page_images_move_turn_replace_and_delete"
 notes = "right-click an image ▸ Save Image As: JPEG unchanged, others PNG. Lossless images apply per-component Decode; Indexed values round and clip before palette lookup. Missing, null or malformed Decode arrays keep the default mapping. Soft-mask Decode intervals preserve opacity before resizing, including indirect arrays and endpoints. Still limited: 16-bit samples use high bytes; general JPEG image Decode, ICC transforms, and calibrated colors remain unsupported."
 
 [[feature]]
+id = "edit.split-text-box"
+title = "Split a text box into lines or at spaces (Thai edition)"
+area = "C"
+tier = "P2"
+milestone = "M7"
+status = "shipped"
+commands = ["edit.edit_text"]
+tools = ["content_split"]
+evidence = ["crates/edit/src/tests.rs::a_text_box_splits_into_lines_and_at_spaces", "crates/edit/src/tests.rs::thai_form_text_splits_at_its_spaces", "crates/edit/src/tests.rs::one_piece_or_turned_text_does_not_split", "crates/ui-egui/tests/it/object_selection.rs::an_added_box_splits_into_its_lines", "crates/ui-egui/tests/it/object_selection.rs::an_added_box_splits_at_its_spaces", "crates/ui-egui/tests/it/object_selection.rs::a_page_paragraph_splits_by_its_rows", "crates/automation/tests/it/automation.rs::a_text_box_splits_through_tools"]
+notes = "Thai edition. In Edit text & images, right-click one text box or paragraph: Split into lines makes a box per line, Split at spaces a box per word of each line (a form's labels such as เชื้อชาติ...... สัญชาติ...... apart), each where it was drawn, in the same look; one undo step. Headless: content_split, for added text boxes only; a paragraph of the page splits only in the app. Per-character colours and sizes of a paragraph are not carried into the pieces (each takes the paragraph's look). Turned, stacked and right-to-left text doesn't split. Acrobat's behaviour not observed."
+
+[[feature]]
 id = "edit.image-external-editor"
 title = "Edit an image in an external application"
 area = "C"

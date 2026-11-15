@@ -678,6 +678,7 @@ impl PageHits<'_> {
                     && !crate::object_ui::holds_added(view, k)
             })
         });
+        let all_added = added;
         let added = (editing_content && can_modify && picks_up).then(|| crate::content_ui::hit(xf, info, page, added, view, p)).flatten();
         // Added text over the selection, and not part of it, takes the press too.
         let over_selection = added_picture
@@ -697,6 +698,12 @@ impl PageHits<'_> {
                     .is_some_and(|r| !crate::edit_text_ui::fills_page(xf, xf.user_rect(info, page, r.map(|v| v as f32))))
         });
         let paragraphs = paragraphs.filter(|_| !(picture_selected || added_picture && selected_under));
+        // The text of an added box is that box's (Thai edition): its paragraph takes no press of
+        // its own, so its edges don't rewrap it apart from the box.
+        let paragraphs = paragraphs.filter(|h| {
+            let crate::page_router::Owner::Paragraph { block, .. } = h.owner else { return true };
+            !lines.get(block).is_some_and(|l| crate::edit_text_ui::is_added_text(xf, info, page, all_added, l))
+        });
         let objects = objects.filter(|h| !(over_selection && h.owner == selection));
         let corner = (!context && tool == QuickTool::EnhanceCamera && can_modify).then(|| crate::camera_ui::hit(xf, page, view, p)).flatten();
         let link = crate::link_ui::hit(xf, info, page, doc_links, tool, p);

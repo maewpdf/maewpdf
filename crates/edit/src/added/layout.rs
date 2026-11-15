@@ -486,6 +486,68 @@ pub fn fitted_text(t: &AddedText, page_width: f64) -> AddedText {
     AddedText { rect: [x0, r[1], x1, r[3]], ..t.clone() }
 }
 
+/// Thai edition: a text box split into one box per line (`at_spaces`: per line and space), each
+/// where its text was drawn, in the item's look and left-aligned at its own place. Each comes
+/// with the characters of `t.text` it holds (to carry per-character styles). The pieces are the
+/// line's words with the spaces between them dropped. Turned, stacked and right-to-left text,
+/// and text that is one piece already, gives nothing: there is nothing to split.
+pub fn split_text(t: &AddedText, at_spaces: bool) -> Vec<(AddedText, std::ops::Range<usize>)> {
+    if t.direction != TextDirection::Horizontal || !t.rect.iter().all(|v| v.is_finite()) {
+        return Vec::new();
+    }
+    let r = norm(t.rect);
+    let measure = |s: &str| if s.chars().any(is_thai) || craft_face(t).is_some() { shaped_width(t, s, false) } else { latin_width(t, s) };
+    let tall = t.size * 1.2;
+    let mut out = Vec::new();
+    // Where each line starts in the text: lines are found in order, as wrapping drops only the
+    // spaces it breaks at.
+    let mut from = 0usize;
+    for (i, (line, rtl, para)) in wrapped(t).into_iter().enumerate() {
+        if rtl {
+            return Vec::new();
+        }
+        let Some(at) = t.text.get(from..).and_then(|rest| rest.find(line.as_str())).map(|k| k + from) else { continue };
+        from = at + line.len();
+        let top = r[3] - i as f64 * t.line_advance();
+        let width = measure(&line);
+        let left = match t.paragraph_align(para) {
+            Align::Center => (r[0] + r[2] - width) / 2.0,
+            Align::Right => r[2] - width,
+            _ => r[0],
+        };
+        // The line's pieces: the whole line, or its runs between spaces, as byte ranges in it.
+        let mut pieces: Vec<std::ops::Range<usize>> = Vec::new();
+        if at_spaces {
+            let mut start = None;
+            for (k, c) in line.char_indices().chain(std::iter::once((line.len(), ' '))) {
+                match (c.is_whitespace(), start) {
+                    (false, None) => start = Some(k),
+                    (true, Some(s)) => {
+                        pieces.push(s..k);
+                        start = None;
+                    }
+                    _ => {}
+                }
+            }
+        } else {
+            let trimmed = line.trim();
+            if let Some(s) = line.find(trimmed).filter(|_| !trimmed.is_empty()) {
+                pieces.push(s..s + trimmed.len());
+            }
+        }
+        for piece in pieces {
+            let (Some(text), Some(before)) = (line.get(piece.clone()), line.get(..piece.start)) else { continue };
+            let x = left + measure(before);
+            let w = measure(text) + 2.0;
+            let chars_before = t.text.get(..at + piece.start).map_or(0, |s| s.chars().count());
+            let chars = chars_before..chars_before + text.chars().count();
+            let item = AddedText { text: text.to_owned(), rect: [x, top - tall, x + w, top], align: Align::Left, aligns: Vec::new(), ..t.clone() };
+            out.push((item, chars));
+        }
+    }
+    if out.len() < 2 { Vec::new() } else { out }
+}
+
 /// The box a text item occupies (height from its lines).
 pub fn text_rect(t: &AddedText) -> [f64; 4] {
     let r = norm(t.rect);

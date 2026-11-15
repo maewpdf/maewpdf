@@ -1137,9 +1137,11 @@ fn merged_text(mut pieces: Vec<pdfcraft_engine::AddedText>) -> Option<pdfcraft_e
 /// Split into lines (Thai edition): the one text box or paragraph selected, of two lines or more,
 /// becomes a text box per line, each where its line is, in the same look; one undo step. A
 /// paragraph of the page splits by the rows it shows (a first line set in keeps its place); an
-/// added box by the lines it was typed in. The edit, and the boxes expected afterwards (to select
+/// added box by the lines it was typed in. `at_spaces` (Split at spaces) splits each line again
+/// at its spaces, a box per word where it was drawn: a form's labels ("เชื้อชาติ...... สัญชาติ")
+/// apart, from a box of one line too. The edit, and the boxes expected afterwards (to select
 /// them).
-pub(crate) fn split_edit(view: &DocView, doc: &Document) -> Option<(Edit, usize, Vec<EditableObject>)> {
+pub(crate) fn split_edit(view: &DocView, doc: &Document, at_spaces: bool) -> Option<(Edit, usize, Vec<EditableObject>)> {
     // The one object selected: among the objects, an added item selected with a click, or the
     // paragraph whose frame is up (unchanged).
     let (page, target) = view
@@ -1159,7 +1161,9 @@ pub(crate) fn split_edit(view: &DocView, doc: &Document) -> Option<(Edit, usize,
             let block = doc.text_blocks(page).get(target.index)?.clone();
             let lines = doc.text_lines(page);
             let texts: Vec<&str> = block.editor_text.split('\n').collect();
-            if block.rows.len() < 2 || texts.len() != block.rows.len() {
+            // Split at spaces splits a paragraph of one row too.
+            let least = if at_spaces { 1 } else { 2 };
+            if block.rows.len() < least || texts.len() != block.rows.len() {
                 return None;
             }
             for (row, text) in block.rows.iter().zip(texts) {
@@ -1179,7 +1183,7 @@ pub(crate) fn split_edit(view: &DocView, doc: &Document) -> Option<(Edit, usize,
             let added = doc.added().iter().filter(|a| a.page == page).nth(target.index)?;
             let pdfcraft_engine::AddedContent::Text(t) = &added.content else { return None };
             let rows: Vec<&str> = t.text.split('\n').collect();
-            if rows.len() < 2 {
+            if rows.len() < if at_spaces { 1 } else { 2 } {
                 return None;
             }
             let row_h = (t.rect[3] - t.rect[1]) / rows.len() as f64;
@@ -1193,10 +1197,21 @@ pub(crate) fn split_edit(view: &DocView, doc: &Document) -> Option<(Edit, usize,
         }
         ObjectKind::Image => return None,
     }
+    let width = f64::from(info.pages.get(page)?.width);
+    if at_spaces {
+        // Each line's words, where the line draws them; a line of one word stays whole.
+        boxes = boxes
+            .into_iter()
+            .flat_map(|b| {
+                let line = pdfcraft_engine::fitted_text(&b, width);
+                let words: Vec<pdfcraft_engine::AddedText> = pdfcraft_engine::split_text(&line, true).into_iter().map(|(w, _)| w).collect();
+                if words.is_empty() { vec![b] } else { words }
+            })
+            .collect();
+    }
     if boxes.len() < 2 || boxes.iter().any(|b| !b.rect.iter().all(|v| v.is_finite())) {
         return None;
     }
-    let width = f64::from(info.pages.get(page)?.width);
     let mut edits = delete_edits(page, vec![target]);
     let mut expected = Vec::with_capacity(boxes.len());
     for b in boxes {
@@ -1210,25 +1225,32 @@ pub(crate) fn split_edit(view: &DocView, doc: &Document) -> Option<(Edit, usize,
         });
         edits.push(Edit::AddText { page, text: b });
     }
-    Some((Edit::Batch { label: "Split into lines".into(), edits }, page, expected))
+    let label = if at_spaces { "Split at spaces" } else { "Split into lines" };
+    Some((Edit::Batch { label: label.into(), edits }, page, expected))
 }
 
-/// Split into lines in the page's right-click menu, for the one text box or paragraph selected
-/// (Thai edition): `true` when it was shown.
+/// Split into lines and Split at spaces in the page's right-click menu, for the one text box or
+/// paragraph selected (Thai edition): `true` when either was shown.
 pub(crate) fn split_menu(ui: &mut egui::Ui, view: &mut DocView, doc: &Document, allowed: bool) -> bool {
     if view.line_editor.as_ref().is_some_and(|e| e.has_changes()) || view.objects.count() > 1 {
         return false;
     }
-    let Some((edit, page, expected)) = split_edit(view, doc) else { return false };
-    if ui.add_enabled(allowed, egui::Button::new(tl!("Split into lines"))).clicked() {
-        view.pending_edit = Some(edit);
-        view.line_editor = None;
-        (view.content.selected, view.content.menu) = (None, None);
-        view.objects.select_after_paste(page, expected);
-        ui.close();
+    let mut shown = false;
+    for (at_spaces, label) in [(false, "Split into lines"), (true, "Split at spaces")] {
+        let Some((edit, page, expected)) = split_edit(view, doc, at_spaces) else { continue };
+        shown = true;
+        if ui.add_enabled(allowed, egui::Button::new(tl!(label))).clicked() {
+            view.pending_edit = Some(edit);
+            view.line_editor = None;
+            (view.content.selected, view.content.menu) = (None, None);
+            view.objects.select_after_paste(page, expected);
+            ui.close();
+        }
     }
-    ui.separator();
-    true
+    if shown {
+        ui.separator();
+    }
+    shown
 }
 
 /// What the page's right-click menu offers for several objects selected together (Thai edition):

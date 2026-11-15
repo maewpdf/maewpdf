@@ -777,6 +777,72 @@ fn an_added_box_splits_into_its_lines() {
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Split into lines"));
 }
 
+/// Thai edition: an added text box wider than its text is one item with one frame: the edge of
+/// the text in it is the box's to move, not a paragraph's grip that rewraps the text apart from
+/// the box (it showed as a second, smaller box inside the first).
+#[test]
+fn the_text_of_an_added_box_has_no_frame_of_its_own() {
+    let mut h = harness();
+    let id = h.state().views[0].id;
+    let t = AddedText { text: "Short".into(), rect: [60.0, 260.0, 300.0, 280.0], size: 12.0, ..Default::default() };
+    assert!(h.state_mut().apply_edit(Edit::AddText { page: 0, text: t }));
+    crate::support::settle(&mut h);
+    let block = h.state().session.get(id).unwrap().text_blocks(0).into_iter().find(|b| b.text.contains("Short")).expect("its text is a paragraph");
+    assert!(block.rect[2] < 150.0, "the text ends well inside the box: {:?}", block.rect);
+    let edge = at(&h, (block.rect[2] + 1.0) as f32, (500.0 - (block.rect[1] + block.rect[3]) / 2.0) as f32);
+    h.hover_at(edge);
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Move, "the box moves from there; no rewrap grip");
+}
+
+/// Thai edition: boxes split into lines, one under the other, that the page's paragraphs read as
+/// one paragraph, keep each its own frame: no outline round them all, and no rewrap grip at the
+/// edge of their text.
+#[test]
+fn boxes_read_as_one_paragraph_have_no_frame_round_them_all() {
+    let mut h = harness();
+    let id = h.state().views[0].id;
+    for (i, line) in ["First line here", "Second line here", "Third"].iter().enumerate() {
+        let top = 314.0 - 16.0 * i as f64;
+        let t = AddedText { text: (*line).into(), rect: [60.0, top - 14.4, 300.0, top], size: 12.0, ..Default::default() };
+        assert!(h.state_mut().apply_edit(Edit::AddText { page: 0, text: t }));
+    }
+    crate::support::settle(&mut h);
+    let blocks = h.state().session.get(id).unwrap().text_blocks(0);
+    let block = blocks.iter().find(|b| b.text.contains("Second")).expect("their text is a paragraph");
+    assert!(block.text.contains("First") && block.text.contains("Third"), "the three read as one paragraph: {:?}", block.text);
+    let edge = at(&h, (block.rect[2] + 1.0) as f32, (500.0 - (block.rect[1] + block.rect[3]) / 2.0) as f32);
+    h.hover_at(edge);
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Move, "a box moves from there; no rewrap grip");
+}
+
+/// Thai edition: a one-line added box of a form's labels splits at its spaces from the page's
+/// right-click menu, a box per label, left to right on the line, in one undo step.
+#[test]
+fn an_added_box_splits_at_its_spaces() {
+    let mut h = harness();
+    let id = h.state().views[0].id;
+    let t = AddedText { text: "Name...... Age...... Town......".into(), rect: [60.0, 280.0, 340.0, 314.0], size: 12.0, ..Default::default() };
+    assert!(h.state_mut().apply_edit(Edit::AddText { page: 0, text: t }));
+    crate::support::settle(&mut h);
+    let before = added_texts(&h).len();
+    let r = added_texts(&h).into_iter().find(|(t, _)| t.starts_with("Name")).unwrap().1;
+    let p = at(&h, 80.0, (500.0 - r[3] + 6.0) as f32);
+    click(&mut h, p, Modifiers::NONE);
+    right_click(&mut h, p);
+    assert!(h.query_by_label("Split into lines").is_none(), "one line has no lines to split");
+    h.get_by_label("Split at spaces").click();
+    crate::support::settle(&mut h);
+    let after = added_texts(&h);
+    assert_eq!(after.len(), before + 2, "{after:?}");
+    let lefts: Vec<f64> = ["Name......", "Age......", "Town......"].iter().map(|w| after.iter().find(|(t, _)| t == w).expect(w).1[0]).collect();
+    assert!(lefts[0] < lefts[1] && lefts[1] < lefts[2], "left to right where they were: {lefts:?}");
+    assert!((lefts[0] - r[0]).abs() < 0.5, "the first keeps the box's left");
+    assert!(after.iter().filter(|(t, _)| t.ends_with("......")).all(|(_, b)| (b[3] - r[3]).abs() < 0.5), "all on the line");
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Split at spaces"));
+}
+
 /// Thai edition: a paragraph of the page splits by the rows it shows, each row's box where the
 /// row is.
 #[test]

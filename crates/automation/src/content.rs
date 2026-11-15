@@ -339,6 +339,28 @@ impl Automation {
         self.apply(a, Edit::DeleteContent { page, index })
     }
 
+    /// Thai edition: Split into lines (`at`: "lines") or Split at spaces ("spaces") of an added
+    /// text box: a box per line, or per word of each line, each where it was drawn, in the same
+    /// look; the original goes. One undo step.
+    pub(crate) fn content_split(&mut self, a: &Args) -> Result<Value> {
+        let (page, index, content, _) = self.item(a)?;
+        let AddedContent::Text(t) = content else { return Err(bad("only a text box splits (this item is an image)")) };
+        let at_spaces = match a.opt_str("at")?.unwrap_or("lines") {
+            "lines" => false,
+            "spaces" => true,
+            other => return Err(bad(format!("at must be \"lines\" or \"spaces\", not {other:?}"))),
+        };
+        let width = f64::from(self.doc(a)?.info.pages.get(page).map_or(0.0, |p| p.width));
+        let pieces = pdfcraft_engine::split_text(&t, at_spaces);
+        if pieces.is_empty() {
+            return Err(bad(if at_spaces { "nothing to split: the box is one word" } else { "nothing to split: the box is one line" }));
+        }
+        let mut edits = vec![Edit::DeleteContent { page, index }];
+        edits.extend(pieces.into_iter().map(|(piece, _)| Edit::AddText { page, text: pdfcraft_engine::fitted_text(&piece, width) }));
+        let label = if at_spaces { "Split at spaces" } else { "Split into lines" };
+        self.apply(a, Edit::Batch { label: label.into(), edits })
+    }
+
     /// Edit ▸ Copy, then Paste: an added item onto `to_page` of `to_doc` (its own page and
     /// document by default), as it is, at `at` (its top-left) or where it was, stepped down and to
     /// the right past copies of it already on that page.

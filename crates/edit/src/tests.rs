@@ -16621,3 +16621,53 @@ fn a_word_rows_tightening_is_not_given_to_its_redrawn_letters() {
     let (plain, tight) = (width(""), width("-1.3 Tc"));
     assert!((plain - tight).abs() < 0.5, "the redrawn letters aren't squeezed: {plain} vs {tight}");
 }
+
+/// Thai edition: a box splits into its lines, each where it was drawn and holding its own
+/// characters of the text; at spaces, into the words of each line, left to right.
+#[test]
+fn a_text_box_splits_into_lines_and_at_spaces() {
+    let t = AddedText { rect: [100.0, 600.0, 500.0, 700.0], text: "Name: Ada  Age: 30\nTown".into(), size: 12.0, ..AddedText::default() };
+    let lines = added::split_text(&t, false);
+    let texts: Vec<&str> = lines.iter().map(|(p, _)| p.text.as_str()).collect();
+    assert_eq!(texts, ["Name: Ada  Age: 30", "Town"]);
+    assert_eq!(lines[0].0.rect[3], 700.0, "the first line keeps the box's top");
+    assert!((lines[1].0.rect[3] - (700.0 - t.line_advance())).abs() < 1e-9, "the next is a line lower");
+    assert!(lines.iter().all(|(p, _)| p.rect[0] == 100.0 && p.size == 12.0));
+    assert_eq!(lines[1].1, 19..23, "Town is characters 19 to 23");
+
+    let words = added::split_text(&t, true);
+    let texts: Vec<&str> = words.iter().map(|(p, _)| p.text.as_str()).collect();
+    assert_eq!(texts, ["Name:", "Ada", "Age:", "30", "Town"]);
+    assert!(words.windows(2).take(3).all(|w| w[0].0.rect[2] <= w[1].0.rect[0] + 2.5), "left to right, apart");
+    let chars: Vec<char> = t.text.chars().collect();
+    for (piece, range) in &words {
+        assert_eq!(chars[range.clone()].iter().collect::<String>(), piece.text);
+    }
+}
+
+/// Thai text splits the same way (Thai edition): the form's labels, each with its dots.
+#[test]
+fn thai_form_text_splits_at_its_spaces() {
+    let t =
+        AddedText {
+            rect: [72.0, 600.0, 560.0, 700.0], text: "เชื้อชาติ...... สัญชาติ...... อยู่บ้านเลขที่......".into(), size: 14.0, ..AddedText::default()
+        };
+    let pieces = added::split_text(&t, true);
+    let texts: Vec<&str> = pieces.iter().map(|(p, _)| p.text.as_str()).collect();
+    assert_eq!(texts, ["เชื้อชาติ......", "สัญชาติ......", "อยู่บ้านเลขที่......"]);
+    assert!(pieces.windows(2).all(|w| w[0].0.rect[0] < w[1].0.rect[0]));
+}
+
+/// Nothing to split is no split: one word, one line, turned text, or a box that isn't a number.
+#[test]
+fn one_piece_or_turned_text_does_not_split() {
+    let one = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "Alone".into(), ..AddedText::default() };
+    assert!(added::split_text(&one, true).is_empty());
+    let line = AddedText { text: "one line".into(), ..one.clone() };
+    assert!(added::split_text(&line, false).is_empty());
+    assert_eq!(added::split_text(&line, true).len(), 2);
+    let turned = AddedText { text: "a\nb".into(), direction: added::TextDirection::Rotated, ..one.clone() };
+    assert!(added::split_text(&turned, false).is_empty());
+    let nan = AddedText { text: "a\nb".into(), rect: [f64::NAN, 0.0, 1.0, 1.0], ..one };
+    assert!(added::split_text(&nan, false).is_empty());
+}

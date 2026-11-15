@@ -31,8 +31,8 @@ pub(crate) use layout::WRAP_CALLS;
 #[cfg(test)]
 pub(crate) use layout::shaped_width;
 pub use layout::{
-    PASTE_STEP, first_undrawable, fitted_text, hugs_text, letters, lines, paste_place, paste_rect, rotated_twin, text_is_wrapped, text_rect,
-    text_width,
+    PASTE_STEP, first_undrawable, fitted_text, hugs_text, letters, lines, paste_place, paste_rect, rotated_twin, split_text, text_is_wrapped,
+    text_rect, text_width,
 };
 #[cfg(test)]
 use pdfcraft_fonts::ShapedCluster;

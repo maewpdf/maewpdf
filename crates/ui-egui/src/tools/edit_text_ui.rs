@@ -652,10 +652,11 @@ const EDGE_REACH: f32 = 8.0;
 /// the frame's Move cursor shows, and a press there takes hold of the box (`object_ui`).
 pub(crate) const FRAME_REACH: f32 = 8.0;
 
-/// The rewrap handles drawn on a paragraph box's left and right edges (screen).
-fn width_handles(b: Rect) -> [Rect; 2] {
-    let h = (b.height() * 0.5).clamp(14.0, 28.0);
-    [b.left(), b.right()].map(|x| Rect::from_center_size(Pos2::new(x, b.center().y), egui::vec2(7.0, h)))
+/// The rewrap handles drawn on a paragraph box (screen): a round grip at each corner (Thai
+/// edition), as an added text box has, so the page's text and the boxes added to it look alike.
+/// Either side's edge, its corners included, rewraps ([`edge_at`]); the height follows the text.
+fn width_handles(b: Rect) -> [Pos2; 4] {
+    [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom()]
 }
 
 /// The edge of `b` that `p` grabs: anywhere along its height, within reach of the line. A narrow
@@ -703,6 +704,37 @@ fn grab_at(boxes: &[Rect], p: Pos2, upright: bool) -> Option<(usize, Grip)> {
 /// A paragraph's box on screen: its text rect (user space), with a little room around it.
 fn paragraph_box(xf: &PageXform, info: &DocInfo, page: usize, rect: [f64; 4]) -> Rect {
     xf.user_rect(info, page, rect.map(|v| v as f32)).expand(2.0)
+}
+
+/// Thai edition: whether paragraph `b` on `page` is the text of added text boxes of `added`
+/// (which lists the whole document's): its text, inside those boxes. One box, or several the
+/// page's paragraphs group as one (boxes split into lines, one under the other). The boxes are
+/// the items then, each with its one frame: the paragraph is neither outlined nor hit on its own
+/// (its outline read as a second box round or inside them, and its edge grips rewrapped it apart
+/// from them). A paragraph of the page's own that added boxes merely lie over keeps its outline.
+pub(crate) fn is_added_text(xf: &PageXform, info: &DocInfo, page: usize, added: &[pdfcraft_engine::Added], b: &pdfcraft_engine::TextBlock) -> bool {
+    let squeeze = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+    let own = squeeze(&b.text);
+    let r = xf.user_rect(info, page, b.rect.map(|v| v as f32));
+    let area = r.area();
+    // A box of no size, or not a number, holds nothing.
+    if own.is_empty() || area.is_nan() || area <= 0.0 {
+        return false;
+    }
+    // The text boxes it lies on, top to bottom and left to right, and how much of it they cover.
+    let mut under: Vec<(Rect, &pdfcraft_engine::AddedText)> = added
+        .iter()
+        .filter(|a| a.page == page)
+        .filter_map(|a| match &a.content {
+            pdfcraft_engine::AddedContent::Text(t) => Some((crate::content_ui::screen_rect(xf, info, page, a.content.rect()).expand(2.0), t)),
+            pdfcraft_engine::AddedContent::Image(_) => None,
+        })
+        .filter(|(boxed, _)| boxed.intersect(r).area() > 0.0)
+        .collect();
+    under.sort_by(|a, b| a.0.top().total_cmp(&b.0.top()).then(a.0.left().total_cmp(&b.0.left())));
+    let covered: f32 = under.iter().map(|(boxed, _)| boxed.intersect(r).area()).sum();
+    let text: String = under.iter().map(|(_, t)| squeeze(&t.text)).collect();
+    covered >= area * 0.8 && text.contains(&own)
 }
 
 /// Whether `p` lies in the box of one of the paragraphs `lines` on `page`, its edge grips there
@@ -821,9 +853,20 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
     // Outlines stay on their page, like its text (#3061).
     let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(xf.rect.expand(1.0)));
     let active = view.line_editor.as_ref().filter(|e| e.page == page).map(|e| e.block);
+    let added = doc.added();
+    let faint = Stroke::new(0.75, ACCENT.gamma_multiply(0.35));
     for (i, b) in boxes.iter().enumerate() {
-        if active != Some(i) {
-            painter.rect_stroke(*b, CornerRadius::same(2), Stroke::new(0.75, ACCENT.gamma_multiply(0.35)), egui::StrokeKind::Outside);
+        if active != Some(i) && !lines.get(i).is_some_and(|l| is_added_text(xf, info, page, added, l)) {
+            painter.rect_stroke(*b, CornerRadius::same(2), faint, egui::StrokeKind::Outside);
+        }
+    }
+    // Added text boxes are outlined as the page's paragraphs are (Thai edition), by their own box:
+    // their text has no outline of its own ([`is_added_text`]), and without this they showed only
+    // under the pointer.
+    for a in added.iter().filter(|a| a.page == page && matches!(a.content, pdfcraft_engine::AddedContent::Text(_))) {
+        let r = crate::content_ui::screen_rect(xf, info, page, a.content.rect());
+        if r.is_positive() {
+            painter.rect_stroke(r.expand(1.0), CornerRadius::same(2), faint, egui::StrokeKind::Outside);
         }
     }
     // A box a switching click asked for opens now, once the edit queued with that click has
@@ -859,7 +902,7 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
     let upright = has_edges(info, page);
     let draw_handles = |b: Rect| {
         for h in width_handles(b) {
-            painter.rect(h, CornerRadius::same(2), Color32::WHITE, Stroke::new(1.0, ACCENT), egui::StrokeKind::Middle);
+            painter.circle(h, 3.5, Color32::WHITE, Stroke::new(1.5, ACCENT));
         }
     };
     // A drag in progress: the box follows the pointer (or the grabbed edge does); releasing applies it.
