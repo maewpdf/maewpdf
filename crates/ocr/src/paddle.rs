@@ -20,9 +20,16 @@ pub const DICTIONARY: &str = "paddle-thai-dict.txt";
 
 /// Longest side, in pixels, of the picture detection sees; a side is a multiple of [`STRIDE`].
 const MAX_SIDE: usize = 1920;
+/// The second, smaller look detection takes, for the lines the first missed.
+const SMALL_SIDE: usize = 960;
+/// Two lines are one text read twice when more than this share of either lies on the other.
+const COVERED: f32 = 0.3;
 const STRIDE: usize = 32;
 /// A pixel is text from this probability.
 const BINARY: f32 = 0.3;
+/// A line is read when the recogniser's mean certainty of its characters is at least this
+/// (PaddleOCR's `drop_score`).
+const DROP_SCORE: f32 = 0.5;
 /// A region is a line of text from this mean probability.
 const REGION: f32 = 0.5;
 /// How far a region is grown, as PaddleOCR's `unclip_ratio`: the model finds a line's core.
@@ -74,7 +81,7 @@ impl ThaiOcr {
         let area = w.checked_mul(h).filter(|a| *a > 0).ok_or(OcrError::EmptyImage)?;
         let channels = [4, 3, 1].into_iter().find(|c| area.checked_mul(*c) == Some(pixels.len())).ok_or(OcrError::EmptyImage)?;
         // One byte order for everything after this: the models were trained on BGR pictures.
-        let bgr = |x: usize, y: usize| -> [u8; 3] {
+        let original = |x: usize, y: usize| -> [u8; 3] {
             let at = (y * w + x) * channels;
             match pixels.get(at..at + channels) {
                 Some([grey]) => [*grey; 3],
@@ -82,29 +89,71 @@ impl ThaiOcr {
                 _ => [255; 3],
             }
         };
-        let mut read = Vec::new();
-        for region in self.regions(&bgr, w, h)? {
-            if let Some(line) = self.read_line(&bgr, region)? {
-                read.push(line);
+        // Dotted leaders are whited out before reading (Thai edition), so the words between them
+        // stand alone. The dots stay in the scan; they are not text.
+        let grey: Vec<u8> = (0..area).map(|at| original(at % w, at / w).iter().map(|c| u32::from(*c)).sum::<u32>() / 3).map(|g| g as u8).collect();
+        let leaders = crate::leaders::find(&grey, w, h);
+        let bgr = |x: usize, y: usize| -> [u8; 3] {
+            if leaders.as_ref().is_some_and(|mask| mask.get(y * w + x).copied().unwrap_or(false)) { [255; 3] } else { original(x, y) }
+        };
+        // The detector is sure of different lines at different sizes: a page made small finds
+        // some short words the full-size look misses, and splits others differently. Both looks
+        // are read; a small-look line that is new is added, and one that is a full-size line
+        // again replaces it only when the recogniser is surer of it.
+        let first = self.regions(&bgr, w, h, MAX_SIDE)?;
+        let second = if w.max(h) > SMALL_SIDE { self.regions(&bgr, w, h, SMALL_SIDE)? } else { Vec::new() };
+        let mut kept: Vec<Option<([f32; 4], Line, f32)>> = Vec::new();
+        for region in first {
+            if let Some((line, sure)) = self.read_line(&bgr, region)? {
+                kept.push(Some((region, line, sure)));
             }
         }
+        let full_size = kept.len();
+        for region in second {
+            if kept.len() >= MAX_REGIONS {
+                break;
+            }
+            let Some((line, sure)) = self.read_line(&bgr, region)? else { continue };
+            let clashes: Vec<usize> =
+                (0..full_size).filter(|i| kept.get(*i).and_then(Option::as_ref).is_some_and(|(a, _, _)| same_text(a, &region))).collect();
+            let surer = clashes.iter().all(|i| kept.get(*i).and_then(Option::as_ref).is_none_or(|(_, _, s)| *s < sure));
+            if surer {
+                for i in clashes {
+                    if let Some(k) = kept.get_mut(i) {
+                        *k = None;
+                    }
+                }
+                kept.push(Some((region, line, sure)));
+            }
+        }
+        let read: Vec<Line> = kept.into_iter().flatten().map(|(_, line, _)| line).collect();
         Ok(reading_order(read))
     }
 
     /// The lines of text on the page, as boxes in image pixels `[left, top, right, bottom]`.
-    fn regions(&self, bgr: &dyn Fn(usize, usize) -> [u8; 3], w: usize, h: usize) -> Result<Vec<[f32; 4]>, OcrError> {
+    fn regions(&self, bgr: &dyn Fn(usize, usize) -> [u8; 3], w: usize, h: usize, max_side: usize) -> Result<Vec<[f32; 4]>, OcrError> {
         const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
         const STD: [f32; 3] = [0.229, 0.224, 0.225];
-        let scale = (MAX_SIDE as f32 / w.max(h) as f32).min(1.0);
+        let scale = (max_side as f32 / w.max(h) as f32).min(1.0);
         let side = |v: usize| (((v as f32 * scale) as usize).div_ceil(STRIDE) * STRIDE).max(STRIDE);
         let (sw, sh) = (side(w), side(h));
         let mut input = NdTensor::<f32, 4>::zeros([1, 3, sh, sw]);
         for y in 0..sh {
-            let from_y = (y * h / sh).min(h - 1);
+            let (y0, y1) = span(y, h, sh);
             for x in 0..sw {
-                let px = bgr((x * w / sw).min(w - 1), from_y);
+                let (x0, x1) = span(x, w, sw);
+                let mut sum = [0u32; 3];
+                for sy in y0..y1 {
+                    for sx in x0..x1 {
+                        let px = bgr(sx, sy);
+                        for c in 0..3 {
+                            sum[c] += u32::from(px[c]);
+                        }
+                    }
+                }
+                let n = ((y1 - y0) * (x1 - x0)).max(1) as f32;
                 for c in 0..3 {
-                    input[[0, c, y, x]] = (f32::from(px[c]) / 255.0 - MEAN[c]) / STD[c];
+                    input[[0, c, y, x]] = (sum[c] as f32 / n / 255.0 - MEAN[c]) / STD[c];
                 }
             }
         }
@@ -124,8 +173,8 @@ impl ThaiOcr {
             .collect())
     }
 
-    /// The text of one line.
-    fn read_line(&self, bgr: &dyn Fn(usize, usize) -> [u8; 3], [left, top, right, bottom]: [f32; 4]) -> Result<Option<Line>, OcrError> {
+    /// The text of one line, and how sure the recogniser is of it (0–1).
+    fn read_line(&self, bgr: &dyn Fn(usize, usize) -> [u8; 3], [left, top, right, bottom]: [f32; 4]) -> Result<Option<(Line, f32)>, OcrError> {
         let (bw, bh) = (right - left, bottom - top);
         if bw < 2.0 || bh < 2.0 {
             return Ok(None);
@@ -144,12 +193,35 @@ impl ThaiOcr {
         let output: NdTensor<f32, 3> =
             self.recognition.run_one(input.view().into(), None).map_err(|e| failed(&e))?.try_into().map_err(|e| failed(&e))?;
         let picks = best_classes(output.view());
+        // A speck the detector took for a line (a tone mark above its word, a smudge) reads as
+        // a character or two the recogniser is unsure of. PaddleOCR drops those the same way.
+        let sure = score(output.view(), &picks);
+        if sure < DROP_SCORE {
+            return Ok(None);
+        }
         let mut words = words_of(&decode(&picks, &self.alphabet), picks.len(), [left, top, right, bottom]);
         for word in &mut words {
             word.rect = ink_rows(bgr, word.rect);
         }
-        Ok((!words.is_empty()).then_some(Line { words }))
+        Ok((!words.is_empty()).then_some((Line { words }, sure)))
     }
+}
+
+/// Whether boxes `a` and `b` are one piece of text read twice: more than [`COVERED`] of either
+/// lies on the other (a short word inside a long line is all on it).
+fn same_text(a: &[f32; 4], b: &[f32; 4]) -> bool {
+    let area = |r: &[f32; 4]| (r[2] - r[0]).max(0.0) * (r[3] - r[1]).max(0.0);
+    let on = (a[2].min(b[2]) - a[0].max(b[0])).max(0.0) * (a[3].min(b[3]) - a[1].max(b[1])).max(0.0);
+    on > 0.0 && (on > area(a) * COVERED || on > area(b) * COVERED)
+}
+
+/// The source pixels `[from, to)` that output pixel `i` of `out` covers, out of `len`: at least
+/// one, so a picture made smaller averages every pixel it covers and one made larger repeats them.
+fn span(i: usize, len: usize, out: usize) -> (usize, usize) {
+    let out = out.max(1);
+    let from = (i * len / out).min(len.saturating_sub(1));
+    let to = ((i + 1) * len / out).clamp(from + 1, len.max(from + 1));
+    (from, to)
 }
 
 /// `rect` with its top and bottom on the ink inside it. A region is grown past its text, and the
@@ -198,6 +270,12 @@ fn best_classes(output: NdTensorView<f32, 3>) -> Vec<usize> {
     (0..steps)
         .map(|t| (0..classes).fold((0, f32::NEG_INFINITY), |best, c| if output[[0, t, c]] > best.1 { (c, output[[0, t, c]]) } else { best }).0)
         .collect()
+}
+
+/// The mean probability of the characters picked (not the blanks): 0 when there are none.
+fn score(output: NdTensorView<f32, 3>, picks: &[usize]) -> f32 {
+    let chosen: Vec<f32> = picks.iter().enumerate().filter(|(_, c)| **c != 0).filter_map(|(t, c)| output.get([0, t, *c]).copied()).collect();
+    if chosen.is_empty() { 0.0 } else { chosen.iter().sum::<f32>() / chosen.len() as f32 }
 }
 
 /// CTC decoding: a run of one class is one character, the blank is none. Each character comes
@@ -378,6 +456,37 @@ mod tests {
         assert_eq!(ink_rows(&page, [0.0, 0.0, 50.0, 25.0]), [0.0, 6.0, 50.0, 13.0]);
         assert_eq!(ink_rows(&|_, _| [255; 3], [0.0, 2.0, 50.0, 25.0]), [0.0, 2.0, 50.0, 25.0]);
         assert_eq!(ink_rows(&page, [5.0, 5.0, 5.0, 5.0]), [5.0, 5.0, 5.0, 5.0]);
+    }
+
+    /// A line is as sure as its characters, blanks aside; no characters is no certainty.
+    #[test]
+    fn a_line_scores_its_characters_only() {
+        let output = NdTensor::from_data([1, 3, 2], vec![0.1, 0.9, 1.0, 0.0, 0.4, 0.6]);
+        let picks = best_classes(output.view());
+        assert_eq!(picks, [1, 0, 1]);
+        assert!((score(output.view(), &picks) - 0.75).abs() < 1e-6);
+        assert_eq!(score(output.view(), &[0, 0, 0]), 0.0);
+        assert!(score(output.view(), &[1, 0, 1]) >= DROP_SCORE && score(output.view(), &[0, 0, 0]) < DROP_SCORE);
+    }
+
+    /// Two boxes are one text when either lies mostly on the other: a repeat of a line, or a
+    /// short word inside a longer line; boxes side by side or barely touching are two.
+    #[test]
+    fn boxes_mostly_on_each_other_are_one_text() {
+        let line = [0.0, 0.0, 100.0, 20.0];
+        assert!(same_text(&line, &[10.0, 2.0, 90.0, 18.0]));
+        assert!(same_text(&[40.0, 0.0, 60.0, 20.0], &[0.0, 0.0, 300.0, 20.0]), "a word inside a long line");
+        assert!(!same_text(&line, &[200.0, 0.0, 240.0, 20.0]));
+        assert!(!same_text(&line, &[90.0, 0.0, 130.0, 20.0]), "touching by a quarter of the shorter");
+        assert!(!same_text(&line, &[0.0; 4]));
+    }
+
+    /// Shrinking averages every pixel covered, growing repeats them, and every span has a pixel.
+    #[test]
+    fn spans_cover_the_source() {
+        assert_eq!((0..2).map(|i| span(i, 4, 2)).collect::<Vec<_>>(), [(0, 2), (2, 4)]);
+        assert_eq!((0..4).map(|i| span(i, 2, 4)).collect::<Vec<_>>(), [(0, 1), (0, 1), (1, 2), (1, 2)]);
+        assert_eq!(span(0, 1, 0), (0, 1));
     }
 
     /// A picture that isn't one of the sizes given is refused, not read past its end.
