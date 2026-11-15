@@ -67,6 +67,19 @@ fn thai_edition_releases_compare_by_their_number() {
     assert!(!is_newer("v0.10.1-th.x", "0.10.1-th.1"), "a -th. without a number is no version");
 }
 
+/// The edition's number may also be written -N (Thai edition): it counts as -th.N does, so a
+/// later release can drop the th. and still be offered.
+#[test]
+fn edition_numbers_without_th_compare_too() {
+    assert!(is_newer("v0.21.1-3", "0.21.1-th.2"), "from -th.N to -N");
+    assert!(is_newer("v0.21.1-th.3", "0.21.1-2"), "and back");
+    assert!(is_newer("v0.22.0-1", "0.21.1-th.9"));
+    assert!(is_newer("v0.21.1-10", "0.21.1-9"));
+    assert!(!is_newer("v0.21.1-2", "0.21.1-th.2"), "the same release either way");
+    assert!(!is_newer("v0.21.1-1", "0.21.1-th.2"));
+    assert!(!is_newer("v0.21.1-rc.1", "0.21.1"), "a pre-release suffix is still not a number");
+}
+
 /// The dialog compares with the edition's own version, -th.N included (Thai edition).
 #[test]
 fn the_next_thai_edition_release_is_offered_and_this_one_is_up_to_date() {
@@ -76,7 +89,7 @@ fn the_next_thai_edition_release_is_offered_and_this_one_is_up_to_date() {
     let mut h = harness(Ok(&next));
     h.state_mut().execute("help.check_updates");
     settle(&mut h);
-    h.get_by_label_contains(&format!("PdfCraft {} is available", next.trim_start_matches('v')));
+    h.get_by_label_contains(&format!("MaewPDF {} is available", next.trim_start_matches('v')));
     h.get_by_label_contains(&format!("You have version {current}."));
     h.get_by_label("Download");
 
@@ -84,7 +97,7 @@ fn the_next_thai_edition_release_is_offered_and_this_one_is_up_to_date() {
         let mut h = harness(Ok(&same));
         h.state_mut().execute("help.check_updates");
         settle(&mut h);
-        h.get_by_label_contains(&format!("PdfCraft {current} is up to date"));
+        h.get_by_label_contains(&format!("MaewPDF {current} is up to date"));
         assert!(h.query_by_label("Download").is_none(), "{same}");
     }
 }
@@ -94,7 +107,7 @@ fn a_newer_release_is_offered_for_download() {
     let mut h = harness(Ok("v99.0.0"));
     h.state_mut().execute("help.check_updates");
     settle(&mut h);
-    h.get_by_label_contains("PdfCraft 99.0.0 is available");
+    h.get_by_label_contains("MaewPDF 99.0.0 is available");
     h.get_by_label("Download");
     h.get_by_label("Later").click();
     h.run_steps(3);
@@ -138,7 +151,7 @@ fn nothing_is_asked_until_the_user_checks() {
     h.state_mut().execute("help.check_updates");
     settle(&mut h);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
-    h.get_by_label_contains("PdfCraft 99.0.0 is available");
+    h.get_by_label_contains("MaewPDF 99.0.0 is available");
 }
 
 /// A release newer than any build, with an installer.

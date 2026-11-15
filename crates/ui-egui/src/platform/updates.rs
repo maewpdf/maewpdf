@@ -67,9 +67,10 @@ fn current_version() -> String {
 }
 
 /// Whether release `latest` (a tag such as `v0.2.0`) is newer than version `current` (`0.1.1`).
-/// A Thai edition suffix `-th.N` counts after the numbers (`0.10.1-th.2` is newer than
-/// `0.10.1-th.1`, which is newer than `0.10.1`); other pre-release and build suffixes are
-/// ignored. A version that doesn't parse is never newer.
+/// The edition's release number counts after the numbers, written `-th.N` or `-N` (Thai
+/// edition: either way, so a later release may drop the `th.`): `0.10.1-th.2` and `0.10.1-2` are
+/// newer than `0.10.1-th.1`, which is newer than `0.10.1`. Other pre-release and build suffixes
+/// are ignored. A version that doesn't parse is never newer.
 pub fn is_newer(latest: &str, current: &str) -> bool {
     matches!((parse(latest), parse(current)), (Some(l), Some(c)) if l > c)
 }
@@ -90,9 +91,11 @@ fn parse(v: &str) -> Option<(u64, u64, u64, u64)> {
     if parts.next().is_some() {
         return None;
     }
-    // The Thai edition's release number (Thai edition); a `-th.` that isn't one is no version.
-    let edition = match suffix.and_then(|s| s.strip_prefix("th.")) {
-        Some(n) => n.split(['-', '+']).next()?.parse::<u64>().ok()?,
+    // The Thai edition's release number (Thai edition), `th.N` or `N`; a `-th.` that isn't one is
+    // no version, and another suffix (`-rc.1`) counts as none.
+    let edition = match suffix {
+        Some(s) if s.starts_with("th.") => s.strip_prefix("th.")?.split(['-', '+']).next()?.parse::<u64>().ok()?,
+        Some(s) => s.split(['-', '+']).next().and_then(|n| n.parse::<u64>().ok()).unwrap_or(0),
         None => 0,
     };
     Some((major, minor, patch, edition))

@@ -540,8 +540,36 @@ pub fn key_name(s: &str) -> &str {
 
 /// Translate an English UI string; unknown strings come back unchanged.
 pub fn tr(lang: Lang, s: &str) -> &str {
-    lang.i18n().t(lang.lang, s)
+    own_name(lang.i18n().t(lang.lang, s))
 }
+
+/// Thai edition: the app's own name in a sentence about it. The English strings, and the other
+/// languages' catalogs, are PdfCraft's and say "PdfCraft"; this edition is MaewPDF (Thai has its
+/// own wording already). Every UI string naming PdfCraft speaks of the app itself, so the name is
+/// swapped wherever it stands. Each sentence is swapped once and kept, up to [`OWN_NAME_KEPT`]
+/// (the UI has a few dozen); past that the sentence is shown as it is.
+fn own_name(s: &str) -> &str {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    if !s.contains("PdfCraft") {
+        return s;
+    }
+    static KEPT: OnceLock<Mutex<HashMap<String, &'static str>>> = OnceLock::new();
+    let Ok(mut kept) = KEPT.get_or_init(Default::default).lock() else { return s };
+    if let Some(swapped) = kept.get(s) {
+        return swapped;
+    }
+    if kept.len() >= OWN_NAME_KEPT {
+        return s;
+    }
+    // Kept for the life of the app, as the catalogs' own strings are: a bounded set.
+    let swapped: &'static str = Box::leak(s.replace("PdfCraft", crate::menus::APP_NAME).into_boxed_str());
+    kept.insert(s.to_owned(), swapped);
+    swapped
+}
+
+/// Most UI sentences [`own_name`] keeps.
+const OWN_NAME_KEPT: usize = 512;
 
 /// How the layers below say their own sentences in the current language.
 ///
@@ -556,7 +584,7 @@ pub fn words(wording: &str) -> String {
 
 /// Like [`tr`], for an English string that needs a disambiguating `context`.
 pub fn tr_ctx<'a>(lang: Lang, context: &str, s: &'a str) -> &'a str {
-    lang.i18n().tc(lang.lang, context, s)
+    own_name(lang.i18n().tc(lang.lang, context, s))
 }
 
 /// A string keyed by its command id, falling back to the translation of the English `label`. Only
@@ -747,5 +775,19 @@ mod picker_order_tests {
         assert!(keys.windows(2).all(|w| w[0] <= w[1]), "{keys:?}");
         assert_eq!(name_sort_key("Čeština"), "cestina");
         assert_eq!(name_sort_key("Türkçe"), "turkce");
+    }
+}
+
+#[cfg(test)]
+mod own_name_tests {
+    /// Thai edition: a sentence naming PdfCraft names MaewPDF, in English and in a catalog's
+    /// language alike, and the same sentence comes back each time; others are left alone.
+    #[test]
+    fn the_app_is_named_maewpdf() {
+        assert_eq!(super::own_name("Welcome to PdfCraft"), "Welcome to MaewPDF");
+        assert_eq!(super::own_name("PdfCraft {v} is available."), "MaewPDF {v} is available.");
+        assert!(std::ptr::eq(super::own_name("PdfCraft {c} is up to date."), super::own_name("PdfCraft {c} is up to date.")), "kept once");
+        assert_eq!(super::own_name("Open file"), "Open file");
+        assert_eq!(super::own_name("set PDFCRAFT_MODELS"), "set PDFCRAFT_MODELS");
     }
 }
