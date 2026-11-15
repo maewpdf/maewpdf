@@ -27,12 +27,12 @@ fn no_link_leads_to_the_official_community() {
     assert!(h.query_by_label("Discord").is_none());
     assert!(pdfcraft_engine::commands::command("help.discord").is_none());
     assert!(pdfcraft_engine::commands::command("help.website").is_none());
-    assert!(links::LINKS.iter().all(|l| l.url.contains("mixlnwuu") && !l.label.contains("ArtCraft")), "{:?}", links::LINKS);
+    assert!(links::LINKS.iter().all(|l| l.url.contains("maewpdf") && !l.label.contains("ArtCraft")), "{:?}", links::LINKS);
 }
 
 /// Where this unofficial edition's own questions go (its repository), shown in place of the
 /// ArtCraft community card and marks, which docs/brand/LICENSE-brand.txt keeps off modified builds.
-const THAI_EDITION_SITE: &str = "https://mixlnwuu.github.io/maewpdf/";
+const THAI_EDITION_SITE: &str = "https://maewpdf.github.io/";
 
 #[test]
 fn home_screen_names_the_thai_edition_and_its_repository() {

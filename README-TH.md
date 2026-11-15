@@ -1,7 +1,7 @@
 # MaewPDF
 
 โปรแกรมแก้ไข PDF ภาษาไทย (เดิมชื่อ **PdfCraft ภาษาไทย**) ต่อยอดจาก [PdfCraft](https://github.com/storytold/pdfcraft) ของ ArtCraft
-พัฒนาโดย **Non.sittith** · เว็บไซต์: https://mixlnwuu.github.io/maewpdf/
+พัฒนาโดย **Non.sittith** · เว็บไซต์: https://maewpdf.github.io/
 **MaewPDF ไม่ใช่ PdfCraft ฉบับทางการ** และไม่ได้อยู่ในความดูแลของผู้พัฒนา PdfCraft หากพบปัญหา โปรดแจ้งที่ Issues ของ repository นี้ ไม่ใช่ที่โปรเจกต์ต้นฉบับ
 
 > English: MaewPDF (formerly PdfCraft Thai Edition) is a Thai PDF editor based on PdfCraft (Thai UI,

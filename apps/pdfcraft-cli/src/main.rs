@@ -94,7 +94,7 @@ maewpdf-cli run    --script steps.json [--root DIR] [--report]
     "\
 maewpdf-cli ui     --control FILE <method> [key=value …] [--out shot.png]
                                                            drive a running app started with --control FILE
-help and feedback: https://github.com/mixlnwuu/maewpdf/issues"
+help and feedback: https://github.com/maewpdf/maewpdf/issues"
 );
 
 fn main() -> ExitCode {

@@ -97,7 +97,7 @@ mod thai_edition_mark_tests {
     }
 }
 /// The edition's website, shown on the home screen and in About.
-pub(crate) const THAI_EDITION_SITE: &str = "https://mixlnwuu.github.io/maewpdf/";
+pub(crate) const THAI_EDITION_SITE: &str = "https://maewpdf.github.io/";
 
 /// The settings key the Thai edition writes beside the others. The official app, which shares the
 /// settings file, drops it when it saves; its absence tells `restore` who wrote the file last.

@@ -5,10 +5,10 @@ use std::time::Duration;
 use pdfcraft_ui_egui::updates::{Installer, RELEASES_PAGE, Release};
 
 /// The Thai edition's latest release (Thai edition: its own repository, see [`RELEASES_PAGE`]).
-const LATEST: &str = "https://api.github.com/repos/mixlnwuu/maewpdf/releases/latest";
+const LATEST: &str = "https://api.github.com/repos/maewpdf/maewpdf/releases/latest";
 
 /// Where the edition's release files are: an installer listed anywhere else is not offered.
-const DOWNLOADS: &str = "https://github.com/mixlnwuu/maewpdf/releases/download/";
+const DOWNLOADS: &str = "https://github.com/maewpdf/maewpdf/releases/download/";
 
 /// The largest installer accepted (today's is about 100 MB).
 const MAX_INSTALLER: u64 = 1 << 30;
@@ -211,7 +211,7 @@ mod tests {
                 r#"{{"tag_name":"v1.2.3-th.1","html_url":"","assets":[{{"name":"{name}","browser_download_url":"{url}","size":{size},"digest":"{digest}"}}]}}"#
             )
         };
-        let good = "https://github.com/mixlnwuu/maewpdf/releases/download/v1.2.3-th.1/maewpdf-1.2.3-th.1-windows-x64.msi";
+        let good = "https://github.com/maewpdf/maewpdf/releases/download/v1.2.3-th.1/maewpdf-1.2.3-th.1-windows-x64.msi";
         let name = "maewpdf-1.2.3-th.1-windows-x64.msi";
         let digest = format!("sha256:{hash}");
         let i = parse(&answer(name, good, 5, &digest)).unwrap().installer.expect("offered");
@@ -220,7 +220,7 @@ mod tests {
             ("maewpdf-1.2.2-windows-x64.msi", good, 5, digest.as_str()),
             (name, "https://example.com/pdfcraft.msi", 5, digest.as_str()),
             (name, "https://github.com/storytold/pdfcraft/releases/download/v1/x.msi", 5, digest.as_str()),
-            (name, "https://github.com/mixlnwuu/maewpdf/releases/download/../../evil.msi", 5, digest.as_str()),
+            (name, "https://github.com/maewpdf/maewpdf/releases/download/../../evil.msi", 5, digest.as_str()),
             (name, good, 0, digest.as_str()),
             (name, good, MAX_INSTALLER + 1, digest.as_str()),
             (name, good, 5, "sha256:short"),
@@ -253,12 +253,12 @@ mod tests {
 
     #[test]
     fn answers_are_read_and_only_our_release_pages_are_offered() {
-        let r = parse(r#"{"tag_name":"v0.2.0","html_url":"https://github.com/mixlnwuu/maewpdf/releases/tag/v0.2.0"}"#).unwrap();
-        assert_eq!(r, Release { version: "v0.2.0".into(), url: "https://github.com/mixlnwuu/maewpdf/releases/tag/v0.2.0".into(), installer: None });
+        let r = parse(r#"{"tag_name":"v0.2.0","html_url":"https://github.com/maewpdf/maewpdf/releases/tag/v0.2.0"}"#).unwrap();
+        assert_eq!(r, Release { version: "v0.2.0".into(), url: "https://github.com/maewpdf/maewpdf/releases/tag/v0.2.0".into(), installer: None });
         // Upstream's release pages too (Thai edition): the check offers only the edition's.
         for elsewhere in [
             "https://example.com/pdfcraft.exe",
-            "https://github.com/mixlnwuu/maewpdf/releases.evil/x",
+            "https://github.com/maewpdf/maewpdf/releases.evil/x",
             "javascript:alert(1)",
             "https://github.com/storytold/pdfcraft/releases/tag/v9.9.9",
         ] {

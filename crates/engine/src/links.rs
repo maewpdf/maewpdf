@@ -9,8 +9,8 @@ pub const APP: &str = "maewpdf";
 
 // Thai edition: the edition's own pages. Its brand terms ask a modified version not to use the
 // ArtCraft name or present itself as supported by them, so the community links are gone.
-pub const APP_PAGE: &str = "https://mixlnwuu.github.io/maewpdf/";
-pub const GITHUB: &str = "https://github.com/mixlnwuu/maewpdf";
+pub const APP_PAGE: &str = "https://maewpdf.github.io/";
+pub const GITHUB: &str = "https://github.com/maewpdf/maewpdf";
 
 /// A link and the registry command that opens it.
 #[derive(Clone, Copy, Debug)]
