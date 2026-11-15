@@ -524,10 +524,18 @@ pub(crate) fn picture_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocVi
 
 /// The page raster's picture of the box `from`, stretched into `to`, over blanks at `blank` (where
 /// the screen may still show the picture).
-fn stretched_picture(painter: &egui::Painter, xf: &PageXform, tex: egui::TextureId, blank: &[Rect], from: Rect, to: Rect) {
+fn stretched_picture(
+    painter: &egui::Painter,
+    xf: &PageXform,
+    tex: egui::TextureId,
+    under: Option<egui::TextureId>,
+    blank: &[Rect],
+    from: Rect,
+    to: Rect,
+) {
     let clipped = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
     for r in blank {
-        clipped.rect_filled(*r, CornerRadius::ZERO, Color32::WHITE);
+        cover(&clipped, xf, under, *r);
     }
     // The raster has no pixels beyond the page. Clip the source and its corresponding
     // destination together, rather than stretching clamped edge texels into the preview.
@@ -543,6 +551,20 @@ fn stretched_picture(painter: &egui::Painter, xf: &PageXform, tex: egui::Texture
         [source.left_top(), source.right_top(), source.right_bottom(), source.left_bottom()],
         [target.left_top(), target.right_top(), target.right_bottom(), target.left_bottom()],
     );
+}
+
+/// Hides the picture's old place `r`: with the page as it is without the picture (`under`, Thai
+/// edition), or white until that is rendered.
+fn cover(painter: &egui::Painter, xf: &PageXform, under: Option<egui::TextureId>, r: Rect) {
+    match under {
+        Some(page) => {
+            let corners = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()];
+            mapped_picture(painter, xf, page, corners, corners);
+        }
+        None => {
+            painter.rect_filled(r, CornerRadius::ZERO, Color32::WHITE);
+        }
+    }
 }
 
 /// The page picture `index` of `page` alone (Thai edition): its texture and the screen corners of
@@ -567,10 +589,18 @@ fn own_picture(
 }
 
 /// The picture alone at `corners`, showing only `visible`, over blanks at `blank` on its page.
-fn moved_picture(painter: &egui::Painter, xf: &PageXform, tex: egui::TextureId, blank: &[Rect], corners: [Pos2; 4], visible: Rect) {
+fn moved_picture(
+    painter: &egui::Painter,
+    xf: &PageXform,
+    tex: egui::TextureId,
+    under: Option<egui::TextureId>,
+    blank: &[Rect],
+    corners: [Pos2; 4],
+    visible: Rect,
+) {
     let on_page = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
     for r in blank {
-        on_page.rect_filled(*r, CornerRadius::ZERO, Color32::WHITE);
+        cover(&on_page, xf, under, *r);
     }
     // Only the part in `visible` (the picture may be cropped): its corners, with where each falls
     // in the picture's own axes (`corners` is upright here, perhaps flipped).
@@ -628,7 +658,7 @@ pub(crate) fn handle_hit(
     let obb = ImageObb::from_image(image, xf, info, page);
     let picture = |part| Owner::Picture { index: s.index, part };
     let knob = if obb.is_rotated { obb.s_rot } else { rotate_knob(b, clip).0 };
-    if knob.distance(p) < 8.0 {
+    if knob.distance(p) < KNOB_REACH {
         return Some(Hit::new(picture(PicturePart::Knob), Layer::Handle, egui::CursorIcon::Grab));
     }
     let (grip, (handle, _)) = obb.handles().into_iter().enumerate().find(|(_, (_, point))| point.distance(p) < 8.0)?;
@@ -747,6 +777,37 @@ pub enum ImageAction {
     AddComment(usize, usize),
 }
 
+/// How near the rotate knob's centre a press takes it: its drawn radius and a little more.
+const KNOB_REACH: f32 = 10.0;
+
+/// The rotate knob (Thai edition): a round button with a turning arrow, so it reads as "turn"
+/// at a glance rather than as one more resize grip. Filled with the accent while hovered.
+fn rotate_knob_glyph(painter: &egui::Painter, centre: Pos2, hovered: bool) {
+    const RADIUS: f32 = 9.0;
+    let (fill, ink) = if hovered { (ACCENT, Color32::WHITE) } else { (Color32::WHITE, ACCENT) };
+    painter.circle(centre, RADIUS, fill, Stroke::new(1.2, ACCENT));
+    // An open circle, clockwise from the top left round to the top, with the arrowhead at its end.
+    let r = RADIUS * 0.5;
+    let at = |deg: f32| {
+        let a = deg.to_radians();
+        centre + egui::vec2(a.cos(), a.sin()) * r
+    };
+    let (from, to) = (-60.0f32, 220.0f32);
+    let steps = 14;
+    let points: Vec<Pos2> = (0..=steps).map(|k| at(from + (to - from) * k as f32 / steps as f32)).collect();
+    painter.add(egui::Shape::line(points, Stroke::new(1.4, ink)));
+    // The arrowhead points along the circle at its end (clockwise on screen: +90 degrees).
+    let end = at(to);
+    let along = egui::vec2((to + 90.0).to_radians().cos(), (to + 90.0).to_radians().sin());
+    let across = egui::vec2(-along.y, along.x);
+    let head = 3.2;
+    painter.add(egui::Shape::convex_polygon(
+        vec![end + along * head, end - along * head * 0.3 + across * head * 0.9, end - along * head * 0.3 - across * head * 0.9],
+        ink,
+        Stroke::NONE,
+    ));
+}
+
 /// Where the rotate knob sits, and the edge point its stem starts from: above the middle of the
 /// top edge, or below the bottom edge when the area on screen (`view`) has no room above.
 pub(super) fn rotate_knob(b: Rect, view: Rect) -> (Pos2, Pos2) {
@@ -851,11 +912,12 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
         let (out_of_date, raster_old, raster) = (view.page_out_of_date(page), view.page_raster_out_of_date(page), view.page_raster(page));
         let screen = |r: Rect| Rect::from_two_pos(xf.norm_to_screen(r.min.x, r.min.y), xf.norm_to_screen(r.max.x, r.max.y));
         let left_at = view.image_selection.as_ref().and_then(|s| s.settled).filter(|_| out_of_date).map(|(from, _)| from);
+        let under = view.image_drag_under.as_ref().and_then(|u| u.texture(page, i));
         if let Some(s) = view.image_selection.as_mut().filter(|s| s.drag.is_none()) {
             match (s.settled, raster) {
                 (Some((from, to)), Some(tex)) if out_of_date => {
                     let source = if raster_old { from } else { to };
-                    stretched_picture(painter, xf, tex, &[screen(from)], screen(source), screen(to));
+                    stretched_picture(painter, xf, tex, under, &[screen(from)], screen(source), screen(to));
                 }
                 _ if !out_of_date => s.settled = None,
                 _ => {}
@@ -869,13 +931,13 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
         let shown_knob = if obb.is_rotated { obb.s_rot } else { knob };
         if view.image_selection.as_ref().is_some_and(|s| s.drag.is_none()) {
             picture_frame(painter, &obb, b, Color32::TRANSPARENT, Stroke::new(1.5, ACCENT));
+            let knob_hovered = hover_pos.is_some_and(|p| p.distance(shown_knob) < KNOB_REACH);
             if obb.is_rotated {
                 painter.line_segment([obb.s_tc, obb.s_rot], Stroke::new(1.2, ACCENT));
-                painter.circle(obb.s_rot, 4.5, Color32::WHITE, Stroke::new(1.0, ACCENT));
             } else {
                 painter.line_segment([stem, knob], Stroke::new(1.0, ACCENT));
-                painter.circle(knob, 5.0, Color32::WHITE, Stroke::new(1.0, ACCENT));
             }
+            rotate_knob_glyph(painter, shown_knob, knob_hovered);
             for (_, h) in obb.handles() {
                 let is_hovered = hover_pos.is_some_and(|p| p.distance(h) < 10.0);
                 draw_handle(painter, h, false, is_hovered, false, ACCENT);
@@ -1007,13 +1069,13 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
                         let blank: Vec<Rect> = left_at.map(screen).into_iter().chain(std::iter::once(b)).collect();
                         // Moved and stretched as the frame is: a corner scales the picture's own pixels.
                         let follow = |c: Pos2| preview.min + egui::vec2((c.x - b.min.x) * factor.x, (c.y - b.min.y) * factor.y);
-                        moved_picture(painter, xf, tex, &blank, corners.map(follow), visible);
+                        moved_picture(painter, xf, tex, under, &blank, corners.map(follow), visible);
                     } else if preview != b
                         && let Some(tex) = raster
                     {
                         let source = left_at.filter(|_| raster_old).map_or(b, screen);
                         let blank: Vec<Rect> = left_at.map(screen).into_iter().chain(std::iter::once(b)).collect();
-                        stretched_picture(painter, xf, tex, &blank, source, preview);
+                        stretched_picture(painter, xf, tex, under, &blank, source, preview);
                     }
                     painter.rect_filled(visible, CornerRadius::ZERO, ACCENT.gamma_multiply(0.04));
                     painter.rect_stroke(visible, CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);

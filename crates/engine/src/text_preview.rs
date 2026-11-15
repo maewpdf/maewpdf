@@ -148,6 +148,19 @@ impl Document {
         })?
     }
 
+    /// The page beneath picture `index` of `page` while it is moved (Thai edition): the page
+    /// with that picture deleted, so its old place shows what it covered instead of a blank.
+    /// Read-only, like [`Self::text_edit_preview`].
+    pub fn page_image_preview(&self, page: usize, index: usize) -> Result<TextEditPreview, String> {
+        guard(|| {
+            let editor = self.editor.as_ref().ok_or("the document can't be read")?;
+            let mut cos = editor.cos.clone();
+            crate::edit::run_edit_page_image(&mut cos, page, index, &crate::ImageEdit::Delete).map_err(|e| e.to_string())?;
+            let bytes = Arc::new(pdfcraft_cos::write_incremental(&cos, &pdfcraft_cos::SaveOptions::default()).map_err(|e| e.to_string())?);
+            Ok(TextEditPreview { page, bytes, config: self.config.clone() })
+        })?
+    }
+
     /// The document without its marks of `kind`, on every page: what Update replaces them on, so
     /// its preview doesn't draw the new marks over the old ones (or tint the old background).
     /// Made once for all the pages a dialog steps through, as cloning and writing the document

@@ -15,7 +15,7 @@ mod run;
 
 pub use labels::{BATCH_LABELS, EDIT_LABELS};
 pub use run::editor_range;
-pub(crate) use run::{EditCtx, check_permission, run_edit};
+pub(crate) use run::{EditCtx, check_permission, run_edit, run_edit_page_image};
 
 /// Edits that can be applied to a document. Page indices are 0-based.
 /// Thai edition: a part of a paragraph (characters `chars`, counted in its text) and its colour

@@ -16118,3 +16118,23 @@ fn inline_conversions_refuse_office_documents_without_running_libreoffice() {
     assert_eq!(s.convert_to_pdf_inline("notes.txt", &Arc::new(b"hello".to_vec())).unwrap().0, SourceKind::Text);
     assert!(s.as_pdf_inline("scan.jpg", &Arc::new(jpeg_bytes())).unwrap().starts_with(b"%PDF-"));
 }
+
+/// A moved picture's old place shows the page without it (Thai edition): the preview drops the
+/// picture on a copy, and the document keeps it, unchanged and not dirty.
+#[test]
+fn the_page_under_a_moved_picture_is_rendered_without_it() {
+    let mut s = Session::new();
+    let px = image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 0, 0, 255]));
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(px).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let pic = s.create_from_images(&[("p.png".into(), png.into_inner())]).unwrap();
+    let id = s.open("p.pdf", None, pic, None).unwrap();
+    let d = s.get(id).unwrap();
+    let red = |p: &pdfcraft_render::RenderedPage| p.rgba.chunks(4).any(|c| c[0] > 150 && c[1] < 60 && c[2] < 60);
+    let under = d.page_image_preview(0, 0).unwrap().render_background(1.0).unwrap();
+    assert!(!red(&under), "the picture is gone from the page beneath it");
+    assert!(d.page_image_preview(0, 5).is_err());
+    assert_eq!(d.page_images(0).len(), 1);
+    assert!(!d.dirty);
+    assert!(red(&shown(&s, id, 0)), "the document still draws it");
+}

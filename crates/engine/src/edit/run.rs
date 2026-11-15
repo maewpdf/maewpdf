@@ -404,7 +404,7 @@ fn move_page_image_to_page(
     Ok(())
 }
 
-fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usize, change: &ImageEdit) -> Result<(), EditError> {
+pub(crate) fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usize, change: &ImageEdit) -> Result<(), EditError> {
     match change {
         ImageEdit::Move(to) if !to.iter().all(|v| v.is_finite()) => {
             return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("invalid position".into())));

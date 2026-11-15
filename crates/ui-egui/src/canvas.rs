@@ -693,6 +693,9 @@ pub struct DocView {
     /// The page picture being moved or resized, alone (Thai edition): what follows the pointer, so the page
     /// behind it doesn't come along. Keyed by (edit generation, page, index).
     pub image_drag_picture: Option<((u64, usize, usize), Option<egui::TextureHandle>)>,
+    /// The page beneath that picture, without it (Thai edition): what its old place shows while it
+    /// is moved or resized, instead of a white hole over whatever it covered.
+    pub(crate) image_drag_under: Option<ImageUnder>,
     /// Guides dragged out of the rulers (Thai edition), on screen only, and the one being dragged.
     pub(crate) ruler_guides: Vec<ruler_guides::RulerGuide>,
     pub(crate) guide_drag: Option<ruler_guides::GuideDrag>,
@@ -1147,6 +1150,7 @@ impl DocView {
             format_painter: None,
             image_selection: None,
             image_drag_picture: None,
+            image_drag_under: None,
             ruler_guides: Vec::new(),
             guide_drag: None,
             guides_shown: false,
@@ -1736,23 +1740,71 @@ fn paint_page_tiles(
     }
 }
 
+/// The page beneath a moved or resized page picture, rendered without it (Thai edition). Kept
+/// after the gesture, so the old place still shows it until the page's new raster is in.
+pub(crate) struct ImageUnder {
+    /// (edit generation, page, picture) it was made for.
+    key: (u64, usize, usize),
+    renderer: Option<pdfcraft_render::RenderPool>,
+    texture: Option<egui::TextureHandle>,
+}
+
+impl ImageUnder {
+    /// The page without picture `index` of `page`, once it is rendered.
+    pub(crate) fn texture(&self, page: usize, index: usize) -> Option<egui::TextureId> {
+        (self.key.1 == page && self.key.2 == index).then_some(self.texture.as_ref()?.id())
+    }
+}
+
+/// Starts or collects the render of the page without picture `key` (Thai edition). Without it
+/// (the copy can't be made, or the render fails) the old place is left white, as before.
+fn prepare_image_drag_under(ctx: &egui::Context, view: &mut DocView, doc: &pdfcraft_engine::Document, key: (u64, usize, usize)) {
+    let (_, page, index) = key;
+    if view.image_drag_under.as_ref().is_none_or(|u| u.key != key) {
+        let renderer = doc.page_image_preview(page, index).ok().map(|p| p.renderer());
+        if let (Some(r), Some(p)) = (renderer.as_ref(), doc.info.pages.get(page)) {
+            let max_side = ctx.input(|i| i.max_texture_side) as f32;
+            let scale = BASE_SIDE.min(max_side) / p.width.max(p.height).max(1.0);
+            r.set_queue(vec![pdfcraft_render::RenderRequest { page, scale, ..Default::default() }]);
+        }
+        view.image_drag_under = Some(ImageUnder { key, renderer, texture: None });
+    }
+    let Some(under) = view.image_drag_under.as_mut() else { return };
+    let Some(out) = under.renderer.as_ref().and_then(|r| r.try_recv()) else {
+        if under.renderer.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+        return;
+    };
+    under.renderer = None;
+    if out.error.is_none() {
+        under.texture = Some(ctx.load_texture(
+            "image-drag-under",
+            texture_image([out.width as usize, out.height as usize], out.rgba),
+            egui::TextureOptions::LINEAR,
+        ));
+    }
+}
+
 /// The pixels of the page picture being moved or resized on `page`, decoded once per gesture (Thai
 /// edition).
 fn prepare_image_drag_picture(ctx: &egui::Context, view: &mut DocView, doc: &pdfcraft_engine::Document, page: usize) {
     /// The preview needs no more than this many pixels a side.
     const MAX_SIDE: u32 = 2048;
-    let Some(sel) = view
+    let Some(index) = view
         .image_selection
         .as_ref()
         .filter(|s| s.page == page && s.drag.is_some_and(|d| !matches!(d.target, crate::edit_text_ui::DragTarget::Rotate)))
+        .map(|s| s.index)
     else {
         return;
     };
-    let key = (doc.edit_generation(), page, sel.index);
+    let key = (doc.edit_generation(), page, index);
+    prepare_image_drag_under(ctx, view, doc, key);
     if view.image_drag_picture.as_ref().is_some_and(|(k, _)| *k == key) {
         return;
     }
-    let texture = doc.page_image_rgba(page, sel.index).ok().and_then(|(w, h, pixels)| {
+    let texture = doc.page_image_rgba(page, index).ok().and_then(|(w, h, pixels)| {
         let side = MAX_SIDE.min(u32::try_from(ctx.input(|i| i.max_texture_side)).unwrap_or(MAX_SIDE)).max(1);
         // Every `step`th pixel each way: a preview, so nearest is enough.
         let step = w.max(h).div_ceil(side).max(1) as usize;
