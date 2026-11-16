@@ -1,9 +1,9 @@
 # PdfCraft app icon
 
-<img src="pdfcraft-small.svg" alt="PdfCraft Thai edition app icon: a black cat in a grey hoodie on red" width="128">
+<img src="pdfcraft-small.svg" alt="PdfCraft Thai edition app icon: a black cat in a grey hoodie on amber" width="128">
 
 > **Thai edition.** The edition's icon is its cat (`thai/brand/thai-edition-cat-original.png`, the
-> developer's own, `MIT OR Apache-2.0`) on a rounded red tile (`#E53935`), so it isn't mistaken for
+> developer's own, `MIT OR Apache-2.0`) on a rounded amber tile (`#FF9F1C`; red `#E53935` until 2026-11-16), so it isn't mistaken for
 > the official app. Every file here except the PDF document icon is rendered from the cat by
 > `cargo run --release --manifest-path thai/brand/icons/Cargo.toml` (not by `packaging/icons.sh`);
 > the SVGs wrap a rendered PNG. At 32 px and below the head sits smaller and its greys are lifted so

@@ -1,14 +1,14 @@
 //! Thai edition: renders every app-icon file in `assets/app-icon` (except the PDF document icon)
-//! from the edition's cat, on a rounded red tile.
+//! from the edition's cat, on a rounded amber tile.
 //!
 //! Sizes from 40 px up show the cat's head and hood as drawn. At 32 px and below the head sits a
-//! little smaller, so the red frames its ears, and the greys are lifted, so the hood stays apart
+//! little smaller, so the amber frames its ears, and the greys are lifted, so the hood stays apart
 //! from the face instead of turning into one dark blot.
 use std::path::{Path, PathBuf};
 use tiny_skia::{Color, ColorU8, FillRule, FilterQuality, Mask, Paint, Path as SkPath, PathBuilder, Pixmap, PixmapPaint, Transform};
 
-/// The tile's colour (chosen by the owner, 2026-11-05).
-const RED: (u8, u8, u8) = (0xE5, 0x39, 0x35);
+/// The tile's colour, amber (chosen by the owner, 2026-11-16; red #E53935 before).
+const TILE: (u8, u8, u8) = (0xFF, 0x9F, 0x1C);
 /// Head and hood, in the source picture's pixels: centre and side of the square shown.
 const HEAD: (f32, f32, f32) = (452.0, 412.0, 640.0);
 const HEAD_SMALL: (f32, f32, f32) = (452.0, 412.0, 700.0);
@@ -80,7 +80,7 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-/// The square of `cat` given by `(cx, cy, side)` on a rounded red tile `size` px wide, drawn at
+/// The square of `cat` given by `(cx, cy, side)` on a rounded amber tile `size` px wide, drawn at
 /// four times the size and scaled down.
 fn render(cat: &Pixmap, size: u32, (cx, cy, side): (f32, f32, f32)) -> Result<Pixmap> {
     const SS: u32 = 4;
@@ -89,7 +89,7 @@ fn render(cat: &Pixmap, size: u32, (cx, cy, side): (f32, f32, f32)) -> Result<Pi
     let mut pm = Pixmap::new(big, big).ok_or("canvas")?;
     let path = rounded(b, b * CORNER).ok_or("tile path")?;
     let mut paint = Paint::default();
-    paint.set_color(Color::from_rgba8(RED.0, RED.1, RED.2, 255));
+    paint.set_color(Color::from_rgba8(TILE.0, TILE.1, TILE.2, 255));
     paint.anti_alias = true;
     pm.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
     let mut mask = Mask::new(big, big).ok_or("mask")?;
