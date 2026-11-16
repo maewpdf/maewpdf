@@ -1,6 +1,7 @@
-//! Thai edition: Thai text recognition with PaddleOCR's models (Apache-2.0): PP-OCRv3 text
-//! detection and PP-OCRv5 Thai recognition, in ONNX form, run in this process by the same engine
-//! as the Latin models (rten). No page leaves the machine.
+//! Thai edition: Thai text recognition (Apache-2.0 models): PaddleOCR's PP-OCRv3 text detection
+//! and OpenThai 2.0 OCR Text's Thai line recogniser (iApp's fine-tune of PP-OCRv6 tiny; until
+//! 2026-11-16 PaddleOCR's PP-OCRv5 Thai), in ONNX form, run in this process by the same engine as
+//! the Latin models (rten). No page leaves the machine.
 //!
 //! Detection gives each pixel a probability of being text: the regions above [`BINARY`] are the
 //! lines. Recognition reads one line at a time: each time step of its output is a character or
@@ -15,8 +16,8 @@ use rten_tensor::{NdTensor, NdTensorView};
 use crate::{Line, OcrError, Word};
 
 pub const DETECTION_MODEL: &str = "paddle-text-detection.onnx";
-pub const RECOGNITION_MODEL: &str = "paddle-thai-recognition.onnx";
-pub const DICTIONARY: &str = "paddle-thai-dict.txt";
+pub const RECOGNITION_MODEL: &str = "openthai-thai-recognition.onnx";
+pub const DICTIONARY: &str = "openthai-thai-dict.txt";
 
 /// Longest side, in pixels, of the picture detection sees; a side is a multiple of [`STRIDE`].
 const MAX_SIDE: usize = 1920;
@@ -162,15 +163,17 @@ impl ThaiOcr {
         let [_, _, oh, ow] = output.shape();
         let map = |x: usize, y: usize| output[[0, 0, y, x]];
         let (sx, sy) = (w as f32 / ow as f32, h as f32 / oh as f32);
-        Ok(components(&map, ow, oh)
-            .into_iter()
-            .take(MAX_REGIONS)
-            .map(|[l, t, r, b]| {
-                let (bw, bh) = (r - l, b - t);
-                let grow = (bw * bh * UNCLIP / (2.0 * (bw + bh)).max(1.0)).max(1.0);
-                [((l - grow) * sx).max(0.0), ((t - grow) * sy).max(0.0), ((r + grow) * sx).min(w as f32), ((b + grow) * sy).min(h as f32)]
-            })
-            .collect())
+        Ok(attach_marks(
+            components(&map, ow, oh)
+                .into_iter()
+                .take(MAX_REGIONS)
+                .map(|[l, t, r, b]| {
+                    let (bw, bh) = (r - l, b - t);
+                    let grow = (bw * bh * UNCLIP / (2.0 * (bw + bh)).max(1.0)).max(1.0);
+                    [((l - grow) * sx).max(0.0), ((t - grow) * sy).max(0.0), ((r + grow) * sx).min(w as f32), ((b + grow) * sy).min(h as f32)]
+                })
+                .collect(),
+        ))
     }
 
     /// The text of one line, and how sure the recogniser is of it (0–1).
@@ -205,6 +208,53 @@ impl ThaiOcr {
         }
         Ok((!words.is_empty()).then_some((Line { words }, sure)))
     }
+}
+
+/// A region this much shorter than the page's median line, or less, may be a mark cut off its line.
+const MARK_HEIGHT: f32 = 0.6;
+/// How far, in median line heights, a mark may sit from its line.
+const MARK_GAP: f32 = 0.6;
+
+/// `regions` with each loose mark joined to its line. The detector can find a Thai tone mark or
+/// upper vowel as a region of its own, above the line it belongs to ("น้ำ" then reads "นำ" and
+/// the mark becomes a line of its own). A short region whose middle is over or under a taller
+/// one, and close to it, is joined to the nearest such line; a short region with no line near
+/// stays as it is (a short word, a page number).
+fn attach_marks(mut regions: Vec<[f32; 4]>) -> Vec<[f32; 4]> {
+    let height = |r: &[f32; 4]| r[3] - r[1];
+    let mut heights: Vec<f32> = regions.iter().map(height).collect();
+    heights.sort_by(f32::total_cmp);
+    let Some(median) = heights.get(heights.len() / 2).copied().filter(|m| *m > 0.0) else { return regions };
+    let small = |r: &[f32; 4]| height(r) <= median * MARK_HEIGHT;
+    let mut joined = vec![false; regions.len()];
+    for i in 0..regions.len() {
+        let Some(mark) = regions.get(i).copied().filter(small) else { continue };
+        let middle = (mark[0] + mark[2]) / 2.0;
+        let gap = |line: &[f32; 4]| {
+            if mark[3] <= line[1] {
+                line[1] - mark[3]
+            } else if mark[1] >= line[3] {
+                mark[1] - line[3]
+            } else {
+                0.0
+            }
+        };
+        let nearest = regions
+            .iter()
+            .enumerate()
+            .filter(|(j, line)| *j != i && !small(line) && line[0] <= middle && middle <= line[2] && gap(line) <= median * MARK_GAP)
+            .min_by(|(_, a), (_, b)| gap(a).total_cmp(&gap(b)))
+            .map(|(j, _)| j);
+        if let Some(line) = nearest.and_then(|j| regions.get_mut(j)) {
+            *line = [line[0].min(mark[0]), line[1].min(mark[1]), line[2].max(mark[2]), line[3].max(mark[3])];
+            if let Some(done) = joined.get_mut(i) {
+                *done = true;
+            }
+        }
+    }
+    let mut kept = joined.into_iter();
+    regions.retain(|_| !kept.next().unwrap_or(false));
+    regions
 }
 
 /// Whether boxes `a` and `b` are one piece of text read twice: more than [`COVERED`] of either
@@ -467,6 +517,26 @@ mod tests {
         assert!((score(output.view(), &picks) - 0.75).abs() < 1e-6);
         assert_eq!(score(output.view(), &[0, 0, 0]), 0.0);
         assert!(score(output.view(), &[1, 0, 1]) >= DROP_SCORE && score(output.view(), &[0, 0, 0]) < DROP_SCORE);
+    }
+
+    /// A tone mark found apart, just above its line, joins that line; a short word with no line
+    /// near, or beside a line rather than over it, stays a region of its own.
+    #[test]
+    fn a_loose_mark_joins_the_line_under_it() {
+        let lines = [[0.0, 100.0, 500.0, 140.0], [0.0, 200.0, 500.0, 240.0], [0.0, 300.0, 500.0, 340.0]];
+        let mark = [40.0, 88.0, 52.0, 99.0];
+        let mut regions = lines.to_vec();
+        regions.push(mark);
+        let got = attach_marks(regions);
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0], [0.0, 88.0, 500.0, 140.0]);
+        assert_eq!(got[1..], lines[1..]);
+        let far = [40.0, 30.0, 52.0, 41.0];
+        let beside = [600.0, 110.0, 640.0, 125.0];
+        let mut regions = lines.to_vec();
+        regions.extend([far, beside]);
+        assert_eq!(attach_marks(regions.clone()), regions);
+        assert!(attach_marks(Vec::new()).is_empty());
     }
 
     /// Two boxes are one text when either lies mostly on the other: a repeat of a line, or a
