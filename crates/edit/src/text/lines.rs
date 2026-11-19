@@ -434,9 +434,22 @@ pub fn lift_paragraph(doc: &mut Document, page: usize, block: usize) -> Result<V
     let n = pdfcraft_content::num;
     let mut layer: Vec<Op> = Vec::new();
     let mut keep: HashMap<usize, Op> = HashMap::new();
+    // The `/ActualText` spans that go with their shows (left out of the page).
+    let mut spans: std::collections::HashSet<usize> = std::collections::HashSet::new();
     for placed in members.iter().flat_map(|m| m.placed.iter()) {
-        let [i] = placed.ops.as_slice() else {
-            return Err(EditError::Invalid("this paragraph carries replacement text (/ActualText) and can't be arranged yet".into()));
+        // A show in a span of its own (Thai edition: the text PdfCraft writes wraps each Thai
+        // syllable so) goes into the layer inside its span. Shows in the span that draw no glyph
+        // (the shifts a move puts round it) only move the pen and stay on the page. A span over
+        // several shows that draw is refused.
+        let refused = || EditError::Invalid("this paragraph carries replacement text (/ActualText) and can't be arranged yet".into());
+        let (i, span) = match placed.ops.as_slice() {
+            [i] => (i, None),
+            [shows @ .., open, close] if ops.get(*open).is_some_and(|o| o.is("BDC")) && ops.get(*close).is_some_and(|o| o.is("EMC")) => {
+                let mut drawing = shows.iter().filter(|j| ops.get(**j).is_some_and(draws_glyphs));
+                let (Some(i), None) = (drawing.next(), drawing.next()) else { return Err(refused()) };
+                (i, ops.get(*open).zip(ops.get(*close)).map(|(o, c)| ((*open, o.clone()), (*close, c.clone()))))
+            }
+            _ => return Err(refused()),
         };
         let op = ops.get(*i).ok_or_else(|| EditError::Invalid("the paragraph's operators could not be found".into()))?;
         if !matches!(op.op.as_slice(), b"Tj" | b"TJ") {
@@ -464,6 +477,10 @@ pub fn lift_paragraph(doc: &mut Document, page: usize, block: usize) -> Result<V
         if let Some(w) = state.line_width {
             layer.push(Op::new("w", vec![n(w)]));
         }
+        if let Some(((open, op), _)) = &span {
+            spans.insert(*open);
+            layer.push(Op { op: op.op.clone(), operands: op.operands.clone(), inline: None, span: 0..0 });
+        }
         layer.push(Op::new("BT", vec![]));
         layer.extend(state.ops());
         if state.render_mode != 0 {
@@ -472,15 +489,27 @@ pub fn lift_paragraph(doc: &mut Document, page: usize, block: usize) -> Result<V
         layer.push(Op::new("Tm", placed.tm.iter().map(|v| n(*v)).collect()));
         layer.push(Op { op: op.op.clone(), operands: op.operands.clone(), inline: None, span: 0..0 });
         layer.push(Op::new("ET", vec![]));
+        if let Some((_, (close, _))) = &span {
+            spans.insert(*close);
+            layer.push(Op::new("EMC", vec![]));
+        }
         layer.push(Op::new("Q", vec![]));
     }
     let new_data = splice(&pieces, &ops, |i| match keep.remove(&i) {
         Some(displacement) => (vec![displacement], false),
+        None if spans.contains(&i) => (Vec::new(), false),
         None => (Vec::new(), true),
     });
     let contents = rewritten_contents(doc, &streams, new_data)?;
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(serialize_ops(&layer))
+}
+
+/// Whether `op` shows a glyph: a string that isn't empty, alone or in a `TJ` array.
+fn draws_glyphs(op: &Op) -> bool {
+    let shown = |o: &Object| matches!(o, Object::String(s) if !s.bytes.is_empty());
+    matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"")
+        && op.operands.iter().any(|o| shown(o) || o.as_array().is_some_and(|a| a.iter().any(shown)))
 }
 
 /// Thai edition: the content stream (its place in the page's `/Contents`) that paragraph `block`
@@ -582,7 +611,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
             let bt = pen.bt;
             let (near, gap) = pen.continues(&s, if bt == s.bt { 3.0 } else { 1.5 });
             piece == si
-                && lines.last().is_some_and(|l| l.scope == s.scope && l.paint == s.paint && l.logical_order == s.logical_order)
+                && lines.last().is_some_and(|l| l.scope == s.scope && l.group == s.group && l.boxed == s.boxed && l.paint == s.paint && l.logical_order == s.logical_order)
                 && (bt == s.bt || lines.last().is_some_and(|l| compatible_word(l, &s)))
                 && (s.text.trim().is_empty() || lines.last().is_some_and(|l| same_font(l, &s.font, &s.base_font, s.face.as_deref())))
                 && (s.text.trim().is_empty()
@@ -652,6 +681,8 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
                 soft_break: s.soft_break,
                 hard_break: s.hard_break,
                 soft_gap: s.soft_gap,
+                group: s.group,
+                boxed: s.boxed,
                 ops: std::iter::once(s.op).chain(s.extra_ops.iter().copied()).collect(),
                 placed: vec![Placed::of(&s)],
                 origin: Origin {
@@ -697,6 +728,8 @@ fn compatible_word(line: &TextLine, shown: &Shown) -> bool {
     // can't be seen. Some producers still write it (`0.0001 Tc` on one word of a line).
     let em = shown.state.size.abs() / 1000.0;
     line.scope == shown.scope
+        && line.group == shown.group
+        && line.boxed == shown.boxed
         && line.paint == shown.paint
         && same(&line.origin.tm[..4], &shown.tm.0[..4])
         && same(&line.origin.ctm, &shown.state.ctm.0)
@@ -711,8 +744,9 @@ fn compatible_word(line: &TextLine, shown: &Shown) -> bool {
 fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, mut s: Shown, stream: usize) {
     let joins = last.is_some_and(|pen| {
         let bt = pen.bt;
-        lines.last().is_some_and(|l| l.scope == s.scope && l.paint == s.paint && l.logical_order == s.logical_order)
-            && (bt == s.bt || lines.last().is_some_and(|l| compatible_word(l, &s)))
+        lines.last().is_some_and(|l| {
+            l.scope == s.scope && l.group == s.group && l.boxed == s.boxed && l.paint == s.paint && l.logical_order == s.logical_order
+        }) && (bt == s.bt || lines.last().is_some_and(|l| compatible_word(l, &s)))
             && (s.text.trim().is_empty() || lines.last().is_some_and(|l| same_font(l, &s.font, &s.base_font, s.face.as_deref())))
             && (s.text.trim().is_empty()
                 || lines.last().is_some_and(|l| {
@@ -777,6 +811,8 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, mut s: Shown, st
             soft_break: s.soft_break,
             hard_break: s.hard_break,
             soft_gap: s.soft_gap,
+            group: s.group,
+            boxed: s.boxed,
             ops: std::iter::once(s.op).chain(s.extra_ops.iter().copied()).collect(),
             placed: vec![Placed::of(&s)],
             origin: Origin {
@@ -1033,18 +1069,47 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
 /// `repair_word_sara_am`), even when the two glyphs come in separate runs. Only the text from
 /// byte `from` on (and the character before it) is looked at, so calling it after each append
 /// stays linear.
+///
+/// Some of Word's PDFs map that Nikhahit (a glyph of no width) to a space: "จำกัด" read as
+/// "จ ากัด", and a rewrite (a box widened) drew the space. No Thai word starts with Sara Aa, so a
+/// space between a Thai letter and Sara Aa is that Nikhahit too.
 pub(super) fn join_sara_am(text: &mut String, from: usize) {
     const SPLIT: &str = "\u{0E4D}\u{0E32}";
-    let mut start = from.min(text.len()).saturating_sub(SPLIT.len() / 2);
+    // Nothing appended: nothing to join.
+    if from >= text.len() {
+        return;
+    }
+    // Far enough back for the letter before a space before the appended Sara Aa.
+    let mut start = from.min(text.len()).saturating_sub(4);
     while start > 0 && !text.is_char_boundary(start) {
         start -= 1;
     }
     let Some(tail) = text.get(start..) else { return };
-    if tail.contains(SPLIT) {
-        let joined = tail.replace(SPLIT, "\u{0E33}");
+    let spaced = tail.char_indices().any(|(i, c)| {
+        c == ' '
+            && tail.get(i + 1..).is_some_and(|r| r.starts_with('\u{0E32}'))
+            && tail.get(..i).and_then(|b| b.chars().last()).is_some_and(thai_before_sara_aa)
+    });
+    if tail.contains(SPLIT) || spaced {
+        let mut joined = String::with_capacity(tail.len());
+        let mut chars = tail.chars().peekable();
+        while let Some(c) = chars.next() {
+            let am = (c == '\u{0E4D}' || (c == ' ' && joined.chars().last().is_some_and(thai_before_sara_aa))) && chars.peek() == Some(&'\u{0E32}');
+            if am {
+                chars.next();
+                joined.push('\u{0E33}');
+            } else {
+                joined.push(c);
+            }
+        }
         text.truncate(start);
         text.push_str(&joined);
     }
+}
+
+/// A Thai letter Sara Am can follow: a consonant, or a tone mark over one (Thai edition).
+fn thai_before_sara_aa(c: char) -> bool {
+    ('\u{0E01}'..='\u{0E2E}').contains(&c) || ('\u{0E48}'..='\u{0E4B}').contains(&c)
 }
 
 #[cfg(test)]
@@ -1059,6 +1124,22 @@ mod sara_am_tests {
         let mut t = String::from("กา");
         super::join_sara_am(&mut t, 0);
         assert_eq!(t, "กา", "a lone Sara Aa stays");
+        // Thai edition: a Nikhahit a PDF maps to a space, in runs of a glyph each.
+        let mut t = String::from("\u{0E08} ");
+        let from = t.len();
+        t.push('\u{0E32}');
+        super::join_sara_am(&mut t, from);
+        assert_eq!(t, "จำ");
+        let mut t = String::from("ท\u{0E48} ");
+        let from = t.len();
+        t.push('\u{0E32}');
+        super::join_sara_am(&mut t, from);
+        assert_eq!(t, "ท\u{0E48}\u{0E33}");
+        let mut t = String::from("A ");
+        let from = t.len();
+        t.push('\u{0E32}');
+        super::join_sara_am(&mut t, from);
+        assert_eq!(t, "A \u{0E32}", "a space after other text stays");
         // A start past the end (nothing appended) or inside a character is safe.
         let mut t = String::from("\u{0E4D}\u{0E32}");
         super::join_sara_am(&mut t, 99);

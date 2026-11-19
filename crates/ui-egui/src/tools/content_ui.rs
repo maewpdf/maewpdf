@@ -101,8 +101,9 @@ impl TextDraft {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Grab {
     Move,
-    /// Which corner: (left, top) in screen terms.
-    Corner(bool, bool),
+    /// Which corner or side (Thai edition: the middle of each side too): (left, top) in screen
+    /// terms, `None` on the axis the grip leaves alone (a side's middle moves one edge only).
+    Corner(Option<bool>, Option<bool>),
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -302,9 +303,7 @@ impl MoveBackground {
             let Some(p) = pointer else { return };
             match grab {
                 Grab::Move => dragged(base, grab, snap_to_centre(ui, xf.rect, base, p - start), self.picture),
-                Grab::Corner(left, top) => {
-                    snap_resize(ui, xf.rect, base, dragged(base, grab, p - start, self.picture), Some(left), Some(top), self.picture)
-                }
+                Grab::Corner(left, top) => snap_resize(ui, xf.rect, base, dragged(base, grab, p - start, self.picture), left, top, self.picture),
             }
         } else if self.settling.is_some() {
             // A moved text box keeps its top edge (its height follows its lines).
@@ -361,8 +360,30 @@ pub(crate) fn hits_added(xf: &PageXform, info: &DocInfo, page: usize, added: &[A
         .any(|(_, a)| screen_rect(xf, info, page, a.content.rect()).expand(2.0).contains(point))
 }
 
-fn handles(r: Rect) -> [(Pos2, bool, bool); 4] {
-    [(r.left_top(), true, true), (r.right_top(), false, true), (r.left_bottom(), true, false), (r.right_bottom(), false, false)]
+/// The grips of a selected box: its four corners, then the middle of each side (Thai edition: a
+/// box grew or shrank only from a corner, both ways at once).
+fn handles(r: Rect) -> [(Pos2, Option<bool>, Option<bool>); 8] {
+    let (t, f) = (Some(true), Some(false));
+    [
+        (r.left_top(), t, t),
+        (r.right_top(), f, t),
+        (r.left_bottom(), t, f),
+        (r.right_bottom(), f, f),
+        (r.center_top(), None, t),
+        (r.center_bottom(), None, f),
+        (r.left_center(), t, None),
+        (r.right_center(), f, None),
+    ]
+}
+
+/// The pointer over a grip of [`handles`].
+fn resize_icon(left: Option<bool>, top: Option<bool>) -> egui::CursorIcon {
+    match (left, top) {
+        (Some(_), None) => egui::CursorIcon::ResizeHorizontal,
+        (None, Some(_)) => egui::CursorIcon::ResizeVertical,
+        (l, t) if l == t => egui::CursorIcon::ResizeNwSe,
+        _ => egui::CursorIcon::ResizeNeSw,
+    }
 }
 
 /// How close (screen points) a moved box's edge or centre comes to a guide before it snaps onto
@@ -469,12 +490,17 @@ fn snap_targets(ctx: &egui::Context, page: Rect, from: Rect) -> Vec<Rect> {
     all.map(|v| v.iter().filter(|b| b.is_positive() && !inside.contains_rect(**b)).copied().collect()).unwrap_or_default()
 }
 
+/// How far (screen points) a press moves before the smart guides pull it: within it, it is a click.
+const UNMOVED: f32 = 3.0;
+
 /// Smart guides (Thai edition), as in Photoshop: the move `d` of a box `r` (screen), adjusted so
 /// one of its edges or its centre lands on another box's edge or centre, or on the page's centre
 /// lines, when it comes within [`SNAP`] of one. Alt held moves freely.
 pub(crate) fn snap_to_centre(ui: &egui::Ui, page: Rect, r: Rect, d: egui::Vec2) -> egui::Vec2 {
     let ctx = ui.ctx();
-    if ui.input(|i| i.modifiers.alt) || !guide_options(ctx).1 {
+    // A press that hasn't moved yet is a click, not a move: the guides wait for the pointer.
+    // Before, a click on a row a hair above the next one snapped it onto that row's top.
+    if d.length() <= UNMOVED || ui.input(|i| i.modifiers.alt) || !guide_options(ctx).1 {
         return d;
     }
     let grid = ctx.data(|g| g.get_temp::<Option<f32>>(grid_id(page))).flatten();
@@ -736,7 +762,18 @@ fn dragged(r: Rect, grab: Grab, d: egui::Vec2, keep_aspect: bool) -> Rect {
     match grab {
         Grab::Move => r.translate(d),
         Grab::Corner(left, top) => {
-            let (mut dx, mut dy) = (if left { -d.x } else { d.x }, if top { -d.y } else { d.y });
+            // A side's middle (Thai edition) leaves the other axis alone.
+            let dx = match left {
+                Some(true) => -d.x,
+                Some(false) => d.x,
+                None => 0.0,
+            };
+            let dy = match top {
+                Some(true) => -d.y,
+                Some(false) => d.y,
+                None => 0.0,
+            };
+            let (mut dx, mut dy) = (dx, dy);
             if keep_aspect && r.width() > 0.0 && r.height() > 0.0 {
                 // Use the axis with the larger relative pointer change so shrinking along one axis
                 // does not freeze when the other axis has not moved inward (#4477).
@@ -747,15 +784,22 @@ fn dragged(r: Rect, grab: Grab, d: egui::Vec2, keep_aspect: bool) -> Rect {
                 dy = r.height() * k - r.height();
             }
             let mut out = r;
-            if left {
-                out.min.x -= dx;
-            } else {
-                out.max.x += dx;
+            // A side kept by a picture's proportions grows about its middle on the other axis.
+            match left {
+                Some(true) => out.min.x -= dx,
+                Some(false) => out.max.x += dx,
+                None => {
+                    out.min.x -= dx / 2.0;
+                    out.max.x += dx / 2.0;
+                }
             }
-            if top {
-                out.min.y -= dy;
-            } else {
-                out.max.y += dy;
+            match top {
+                Some(true) => out.min.y -= dy,
+                Some(false) => out.max.y += dy,
+                None => {
+                    out.min.y -= dy / 2.0;
+                    out.max.y += dy / 2.0;
+                }
             }
             Rect::from_two_pos(out.min, out.max)
         }
@@ -774,8 +818,7 @@ pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, added: &[Added], 
         && let Some((_, left, top)) =
             handles(screen_rect(xf, info, page, a.content.rect()).expand(1.0)).into_iter().find(|(c, ..)| c.distance(p) <= 6.0)
     {
-        let icon = if left == top { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw };
-        return Some(Hit::new(Owner::Added { index: *index, corner: Some((left, top)) }, Layer::Handle, icon));
+        return Some(Hit::new(Owner::Added { index: *index, corner: Some((left, top)) }, Layer::Handle, resize_icon(left, top)));
     }
     let (index, _) = items.iter().rev().find(|(_, a)| screen_rect(xf, info, page, a.content.rect()).expand(2.0).contains(p))?;
     Some(Hit::new(Owner::Added { index: *index, corner: None }, Layer::Placed, egui::CursorIcon::Move))
@@ -838,7 +881,7 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, ccx: ContentCx<'_>, view: &mut
                 };
                 let mut r = dragged(from, grab, d, keep);
                 if let Grab::Corner(left, top) = grab {
-                    r = snap_resize(ui, xf.rect, from, r, Some(left), Some(top), keep);
+                    r = snap_resize(ui, xf.rect, from, r, left, top, keep);
                 }
                 let (p0, p1) = (to_display(&txf, info, to_page, r.left_bottom()), to_display(&txf, info, to_page, r.right_top()));
                 let mut rect = [p0[0], p0[1], p1[0], p1[1]];
@@ -862,6 +905,11 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, ccx: ContentCx<'_>, view: &mut
                         cv.select_added = Some((to_page, on_page(added, to_page).len()));
                         cv.selected = None;
                         Edit::MoveContentToPage { page, index: si, to_page, content: a.content.with_rect(rect), copy: copying }
+                    }
+                    // A text box stretched from its top or bottom keeps that height (Thai
+                    // edition); one resized from a side keeps what it had.
+                    AddedContent::Text(t) if matches!(grab, Grab::Corner(_, Some(_))) => {
+                        Edit::UpdateContent { page, index: si, content: AddedContent::Text(AddedText { rect, fixed_height: true, ..t.clone() }) }
                     }
                     _ => Edit::UpdateContent { page, index: si, content: a.content.with_rect(rect) },
                 });
@@ -1150,7 +1198,7 @@ pub(crate) fn paint_page(
                     r = dragged(r, g, d, picture);
                     paint_offset(painter, xf, p, d);
                 }
-                Grab::Corner(left, top) => r = snap_resize(ui, xf.rect, from, dragged(r, g, p - start, picture), Some(left), Some(top), picture),
+                Grab::Corner(left, top) => r = snap_resize(ui, xf.rect, from, dragged(r, g, p - start, picture), left, top, picture),
             }
             paint_guides(painter, xf.rect, from, r);
         }
@@ -1314,7 +1362,11 @@ pub(crate) fn arrows_nudge(view: &DocView) -> bool {
     view.content.selected.is_some() && view.content.draft.is_none() || view.objects.count() > 0 || view.image_selection.is_some()
 }
 
-/// How far the arrow keys pressed this frame move the selected item, in points: one point a
+/// How far one arrow press moves what is selected, in points (Thai edition: half a point; one
+/// point was too coarse to line a box up with the text beside it). Ten with Shift.
+pub(crate) const NUDGE: f32 = 0.5;
+
+/// How far the arrow keys pressed this frame move the selected item, in points: [`NUDGE`] a
 /// press, ten with Shift. Each press is one undo step.
 pub(crate) fn nudge(ctx: &egui::Context, keys: PageKeys) -> Option<[f64; 2]> {
     if keys.over() {
@@ -1325,7 +1377,7 @@ pub(crate) fn nudge(ctx: &egui::Context, keys: PageKeys) -> Option<[f64; 2]> {
         if i.modifiers.command || i.modifiers.alt {
             return None;
         }
-        let step = if i.modifiers.shift { 10.0 } else { 1.0 };
+        let step = if i.modifiers.shift { 10.0 } else { f64::from(NUDGE) };
         let count = |k| i.num_presses(k) as f64;
         let dx = (count(Key::ArrowRight) - count(Key::ArrowLeft)) * step;
         let dy = (count(Key::ArrowUp) - count(Key::ArrowDown)) * step;
@@ -3318,7 +3370,7 @@ mod tests {
     #[test]
     fn corner_resize_shrinks_image_when_dragged_inward_along_one_axis() {
         let r = Rect::from_min_max(Pos2::new(100.0, 100.0), Pos2::new(200.0, 150.0));
-        let shrunk = dragged(r, Grab::Corner(false, false), egui::vec2(-40.0, 2.0), true);
+        let shrunk = dragged(r, Grab::Corner(Some(false), Some(false)), egui::vec2(-40.0, 2.0), true);
         assert!((shrunk.width() - 60.0).abs() < 1e-3, "width shrinks by 40%: {shrunk:?}");
         assert!((shrunk.height() - 30.0).abs() < 1e-3, "height shrinks proportionally by 40%: {shrunk:?}");
     }

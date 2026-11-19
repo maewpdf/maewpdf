@@ -575,7 +575,24 @@ fn inherits_resources(doc: &Document, resources: &Dict, op: &Op, budget: &mut De
         // A shading pattern has no content of its own.
         _ => int_of(doc, dict, b"PatternType") == Some(1),
     };
-    drawn && dict.get(b"Resources").is_none() && (cat == b"Font" || stream.is_none_or(|s| names_resources(doc, s, budget)))
+    drawn
+        && dict.get(b"Resources").is_none()
+        && if cat == b"Font" { glyphs_name_resources(doc, dict, budget) } else { stream.is_none_or(|s| names_resources(doc, s, budget)) }
+}
+
+/// Whether a Type 3 font's glyph procedures name a resource (or can't all be read to tell). Its
+/// glyphs only look names up when they draw one (Thai edition): a font of outlines only, as the
+/// edition's own fallback fonts for Thai are, draws the same whatever resources surround it, so a
+/// copy of text in it can be pasted onto a page whose names clash with the copy's.
+fn glyphs_name_resources(doc: &Document, font: &Dict, budget: &mut DecodeBudget) -> bool {
+    /// More glyphs than this are not read one by one; the font is taken to need its names.
+    const MAX_GLYPHS: usize = 4096;
+    let Some(procs) = font.get(b"CharProcs").map(|c| doc.resolve(c)).and_then(|c| c.as_dict().cloned()) else { return true };
+    procs.len() > MAX_GLYPHS
+        || procs.iter().any(|(_, proc)| match &*doc.resolve(proc) {
+            Object::Stream(s) => names_resources(doc, s, budget),
+            _ => true,
+        })
 }
 
 /// Whether content stream `s` names a resource (or can't be read within `budget` to tell): device

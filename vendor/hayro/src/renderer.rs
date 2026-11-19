@@ -1468,6 +1468,13 @@ impl Renderer {
             (new_width, new_height)
         };
         let needs_resize = (new_width, new_height) != (source_width, source_height);
+        // PdfCraft patch (Thai edition): an area-shrunk image that can't be snapped to whole
+        // pixels (turned, as a straightened scan is) is sampled a second time at a fractional
+        // scale and angle. Nearest-neighbour then made its edges staircases: a scan's rules came
+        // out broken and its text wobbled below 100%. Bilinear, at about 1:1, keeps them smooth.
+        if area && needs_resize && snapped.is_none() {
+            quality = ImageQuality::Medium;
+        }
 
         // PdfCraft patch (#624): a minified image with a soft mask that is neither interpolated nor
         // area-averaged (a Type 3 glyph image, or a source wider than MAX_RESAMPLING_SOURCE_SIDE)

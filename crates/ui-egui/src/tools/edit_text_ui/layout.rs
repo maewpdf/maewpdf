@@ -39,7 +39,14 @@ pub(super) fn source_look(base_font: &str, size: f64, color: [f64; 3], detected_
 
 pub(crate) fn look_of(b: &pdfcraft_engine::TextBlock) -> pdfcraft_engine::AddedText {
     // With the underline PdfCraft drew under it (Thai edition).
-    pdfcraft_engine::AddedText { underline: b.underlined, ..source_look(&b.base_font, b.size, b.color, b.bold, b.italic) }
+    let look = pdfcraft_engine::AddedText { underline: b.underlined, ..source_look(&b.base_font, b.size, b.color, b.bold, b.italic) };
+    // An invisible OCR row shows in the face and size it is drawn in once made visible (Thai
+    // edition), not the look it was read in: Format text and its preview showed 8 pt Helvetica
+    // for a row that came out in TH Sarabun PSK half again as large.
+    match pdfcraft_engine::ocr_row_look(b) {
+        Some((family, size)) => pdfcraft_engine::AddedText { family, size, bold: false, italic: false, ..look },
+        None => look,
+    }
 }
 
 /// A paragraph of the page as an added text box with its text and look, over the paragraph
@@ -211,23 +218,43 @@ pub(super) fn preview_parts(
 /// slant and underline, as characters of its text, for a paste or the format painter to keep;
 /// empty when all of it looks alike.
 pub(crate) fn paragraph_runs(block: &pdfcraft_engine::TextBlock, lines: &[pdfcraft_engine::TextLine]) -> Vec<pdfcraft_engine::TextRun> {
+    // An OCR row's words are read at the heights of their boxes (marks above and below make a
+    // word's box taller), and drawn in one look once visible ([`look_of`]): not parts of their own.
+    // Taken as parts, boxes merged or split from OCR rows came out from small to large, line by line.
+    if block.invisible {
+        return Vec::new();
+    }
     let text = &block.editor_text;
     let chars = |at: usize| text.get(..at).map_or(0, |s| s.chars().count());
     let mut runs: Vec<pdfcraft_engine::TextRun> = Vec::new();
     for (range, index) in block.edited_spans(text) {
         let Some(line) = lines.get(index) else { continue };
-        let underline = block.underlined && (block.underlined_parts.is_empty() || block.underlined_parts.iter().any(|p| p.contains(&range.start)));
-        let run = pdfcraft_engine::TextRun {
-            chars: chars(range.start)..chars(range.end),
-            color: line.color,
-            size: line.size,
-            bold: line.bold,
-            italic: line.italic,
-            underline,
-        };
-        match runs.last_mut() {
-            Some(last) if last.same_look(&run) && last.chars.end == run.chars.start => last.chars.end = run.chars.end,
-            _ => runs.push(run),
+        // Split where an underlined part starts or ends inside the run (Thai edition): one run of
+        // a single look, underlined in part, was copied underlined to its end.
+        let mut cuts: Vec<usize> = block
+            .underlined_parts
+            .iter()
+            .flat_map(|p| [p.start, p.end])
+            .filter(|&c| c > range.start && c < range.end && text.is_char_boundary(c))
+            .collect();
+        cuts.sort_unstable();
+        cuts.dedup();
+        let mut from = range.start;
+        for to in cuts.into_iter().chain(std::iter::once(range.end)) {
+            let underline = block.underlined && (block.underlined_parts.is_empty() || block.underlined_parts.iter().any(|p| p.contains(&from)));
+            let run = pdfcraft_engine::TextRun {
+                chars: chars(from)..chars(to),
+                color: line.color,
+                size: line.size,
+                bold: line.bold,
+                italic: line.italic,
+                underline,
+            };
+            match runs.last_mut() {
+                Some(last) if last.same_look(&run) && last.chars.end == run.chars.start => last.chars.end = run.chars.end,
+                _ => runs.push(run),
+            }
+            from = to;
         }
     }
     let uniform = runs.windows(2).all(|w| w[0].same_look(&w[1]));

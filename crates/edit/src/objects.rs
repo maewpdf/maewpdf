@@ -16,6 +16,10 @@ pub const MAX_MOVE_OBJECTS: usize = 1_000;
 const MAX_PAGE_OBJECTS: usize = 10_000;
 const MAX_COORDINATE: f64 = 1e9;
 const MAX_CONTENT_BYTES: usize = 128 * 1024 * 1024;
+/// The most content operations a page may have for its objects to be selected together. Thai
+/// edition: a million, as isolating a stream allows; pages pasted on again and again passed the
+/// 100 000 it was, and their objects could no longer be copied.
+pub(crate) const MAX_GROUP_OPERATIONS: usize = 1_000_000;
 
 /// The source inventory of an editable item. Indexes are zero-based within that inventory.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -79,7 +83,8 @@ pub fn editable_objects(doc: &Document, page: usize) -> Result<Vec<EditableObjec
     for (index, b) in crate::text::selectable_blocks(doc, page, &excluded)? {
         objects.push(EditableObject {
             target: ObjectTarget { kind: ObjectKind::Text, index },
-            rect: b.rect,
+            // The box it was given, when it has one of its own (Thai edition).
+            rect: b.frame.unwrap_or(b.rect),
             content_type: "text",
             text: Some(b.text),
         });
@@ -104,6 +109,33 @@ pub fn editable_objects(doc: &Document, page: usize) -> Result<Vec<EditableObjec
 
 /// Move selected mixed objects by a user-space vector as one atomic operation. All targets
 /// refer to the original inventories. A refusal leaves the graph, including overlay, untouched.
+/// Thai edition: Merge text boxes. Paragraphs `blocks` of `page` (indexes into its text blocks)
+/// become one group, handled together, each keeping its own text, look and place (`group`), or
+/// leave the group they are in (`!group`). See [`crate::text::group_text`].
+/// Added text boxes `added` join the group too: each becomes text of the page where it is (its
+/// stream stays in place, so no paragraph moves in the page's order) and its paragraph is grouped.
+pub fn group_paragraphs(doc: &mut Document, page: usize, blocks: &[usize], added: &[usize], group: bool) -> Result<(), EditError> {
+    let count = blocks.len().saturating_add(added.len());
+    if count > MAX_MOVE_OBJECTS || (group && count < 2) {
+        return Err(EditError::Invalid("select between 2 and 1000 text boxes to merge".into()));
+    }
+    let mut all: Vec<usize> = blocks.to_vec();
+    if !added.is_empty() {
+        let owned = added.iter().map(|i| crate::added::added_stream(doc, page, *i)).collect::<Result<BTreeSet<_>, _>>()?;
+        all.extend(crate::text::blocks_in_streams(doc, page, &owned)?);
+        let mut released: Vec<usize> = added.to_vec();
+        released.sort_unstable();
+        released.dedup();
+        // From the last, so the indexes still to release don't move.
+        for index in released.into_iter().rev() {
+            crate::added::release_content(doc, page, index)?;
+        }
+    }
+    all.sort_unstable();
+    all.dedup();
+    crate::text::group_text(doc, page, &all, group)
+}
+
 pub fn move_objects(doc: &mut Document, page: usize, targets: &[ObjectTarget], offset: [f64; 2]) -> Result<(), EditError> {
     if targets.is_empty() || targets.len() > MAX_MOVE_OBJECTS {
         return Err(EditError::Invalid("select between 1 and 1000 objects to move".into()));
@@ -328,7 +360,7 @@ fn checked_streams(doc: &Document, page: usize) -> Result<Vec<ContentStream>, Ed
             remaining.checked_sub(bytes.len()).ok_or_else(|| EditError::Invalid("the page content is too large for group selection".into()))?;
         let parsed = pdfcraft_content::parse(&bytes);
         operations = operations.saturating_add(parsed.ops.len());
-        if operations > 100_000 {
+        if operations > MAX_GROUP_OPERATIONS {
             return Err(EditError::Invalid("this page has too many content operations for group selection".into()));
         }
         for op in parsed.ops {

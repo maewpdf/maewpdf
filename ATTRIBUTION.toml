@@ -2599,7 +2599,7 @@ licence = "ISC AND (MIT OR Apache-2.0)"
 licence_file = "assets/app-icon/LICENSE-document.txt"
 kind = "icon"
 usage = "Master artwork for the Windows PDF file type icon; rendered by packaging/icons.sh, without fonts or external images"
-sha256 = "c129f1b538ce16e3c3fa0d89d3301038c51249ba5d61bfd98c46e69cfdf5c316"
+sha256 = "f40e5c6ee0cd3241fe77633569e1d6a90e3e3f147560ab16178753f47763ff84"
 
 [[asset]]
 path = "assets/app-icon/pdfcraft-document.ico"
@@ -2610,7 +2610,7 @@ licence = "ISC AND (MIT OR Apache-2.0)"
 licence_file = "assets/app-icon/LICENSE-document.txt"
 kind = "icon"
 usage = "Embedded in pdfcraft.exe as resource 2; the Windows installer uses it for PdfCraft.Document and Applications/pdfcraft.exe PDF file associations"
-sha256 = "910be5e0ecdc94ce00368077ca1bef449bd5d62a75516feeb37884296c6fac4d"
+sha256 = "8f7c9345859d3570f140ab5ee549950a9f89274212fd44609f747fc24f823dff"
 
 [[asset]]
 path = "assets/app-icon/hicolor/16x16/apps/ai.storyteller.pdfcraft.png"
@@ -3188,7 +3188,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "The Thai edition's own Thai UI strings, laid over craft-i18n's Thai catalog by crates/ui-egui/build.rs (thai_edition)"
-sha256 = "0a90d83e2286801b2ed94a7826c51985b01e7e441b9a97fb2acc80c17214a1bf"
+sha256 = "0295443fad4866f9aa377064e8e4f32ebbf3c7c395f1f5e71a20181c3e8dc029"
 
 [[asset]]
 path = "thai/fonts/th-sarabun-psk/THSarabunPSK-Regular.ttf"

@@ -2962,13 +2962,43 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	Snap to Guides	ดูดเข้าแนว
 @id	view.clear_guides	ล้างเส้นไกด์
 	Clear Guides	ล้างเส้นไกด์
-	Editing tips	เคล็ดลับการแก้ไขข้อความ
+	Editing tips	เคล็ดลับการใช้งาน
 	Tips for editing text	เคล็ดลับการแก้ไขข้อความ
 	Change the text and pictures already on the page: click a paragraph to select it, double-click it to type.	แก้ข้อความและรูปภาพที่มีอยู่แล้วในหน้า: คลิกหนึ่งครั้งเพื่อเลือกย่อหน้า ดับเบิลคลิกเพื่อพิมพ์แก้
 	Add a new text box: click where it should go and start typing.	เพิ่มกล่องข้อความใหม่: คลิกตรงที่ต้องการแล้วพิมพ์ได้เลย
 	You can open these tips again from {menu} › {item}.	เปิดคำแนะนำนี้อีกครั้งได้จากเมนู {menu} › {item}
+	Tips for using MaewPDF	เคล็ดลับการใช้งาน MaewPDF
+	Editing text	แก้ไขข้อความ
+	Layout	จัดวาง
+	Click to select, double-click to type.	คลิกเพื่อเลือก ดับเบิลคลิกเพื่อพิมพ์
+	Click where it goes, then type.	คลิกตรงที่ต้องการ แล้วพิมพ์ได้เลย
+	Nudge	ขยับละเอียด
+	Arrow keys move 1 pt, with Shift 10 pt.	ลูกศรขยับทีละ 1 pt กด Shift ด้วยขยับทีละ 10 pt
+	Drag a copy	ลากเพื่อคัดลอก
+	Hold the key and drag a box or picture.	กดปุ่มค้างไว้ แล้วลากกล่องหรือรูป
+	drag	ลาก
+	Give another box this box's font, size and colour.	คัดลอกฟอนต์ ขนาด และสี ไปใส่กล่องอื่น
+	Turn them on at {menu} › {item}.	เปิดได้ที่ {menu} › {item}
+	Guides	เส้นไกด์
+	Drag one out of a ruler; drag it back to remove it.	ลากออกมาจากไม้บรรทัด ลากกลับเข้าไปเพื่อลบ
+	Cover old text; the dropper picks the paper's colour.	ปิดข้อความเดิม ใช้หลอดดูดสีให้เหมือนสีกระดาษ
+	Right-click a box › {item}.	คลิกขวาที่กล่อง › {item}
+	Light or dark	ธีมสว่างหรือมืด
+	Click the theme button at the top right.	คลิกปุ่มธีมที่มุมขวาบน
+	Hold the key and roll the mouse wheel.	กดปุ่มค้างไว้ แล้วหมุนล้อเมาส์
+	wheel	ล้อเมาส์
+	Move around the page	เลื่อนดูหน้า
+	Hold Space and drag, or drag with the middle mouse button.	กด Spacebar ค้างไว้แล้วลาก หรือลากด้วยปุ่มกลางเมาส์
+	Scans & OCR	สแกนและ OCR
+	Makes a scan searchable and copyable. Choose Thai first.	ทำให้สแกนค้นหาและคัดลอกข้อความได้ เลือกภาษาไทยก่อนเริ่ม
+	Turns a grey or yellowed page white and darkens faint letters.	ทำพื้นกระดาษสีเทาหรือเหลืองให้ขาว และทำตัวหนังสือจางให้เข้มขึ้น
+	Shadows and specks	เงาและจุดรบกวน
+	In the same window: {shadow} and {specks}.	ในหน้าต่างเดียวกัน: {shadow} และ {specks}
+	Drag the four corners onto the paper's edges, then {button}.	ลากมุมทั้ง 4 ไปที่ขอบกระดาษ แล้วกด {button}
+	Go through the words it wasn't sure of, one by one.	ไล่ดูคำที่โปรแกรมไม่แน่ใจ แล้วแก้ทีละคำ
 	Got it	เข้าใจแล้ว
 	Merge text boxes	ผสานกล่องข้อความ
+	Ungroup text boxes	แยกกล่องที่ผสาน
 	Split into lines	แยกเป็นบรรทัด
 	Split at spaces	แยกตามช่องว่าง
 	Convert to page text	แปลงเป็นข้อความของหน้า

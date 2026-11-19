@@ -165,6 +165,7 @@ impl HeaderFooter {
             underline: false,
             line_spacing: 0.0,
             direction: crate::added::TextDirection::Horizontal,
+            fixed_height: false,
             ink: None,
         }
     }
@@ -296,6 +297,7 @@ impl Watermark {
             underline: false,
             line_spacing: 0.0,
             direction: crate::added::TextDirection::Horizontal,
+            fixed_height: false,
             ink: None,
         }
     }

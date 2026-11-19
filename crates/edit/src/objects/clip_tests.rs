@@ -100,7 +100,10 @@ fn a_copy_takes_the_selected_objects_their_state_and_only_the_resources_they_use
     assert_eq!(names(b"XObject"), Some(vec![b"Im0".to_vec()]));
     assert_eq!(names(b"ExtGState"), Some(vec![b"GS0".to_vec()]));
     assert!(copied.text().contains("Copied") && copied.text().contains("Too") && !copied.text().contains("Skip"), "{}", copied.text());
-    assert_eq!(pdfcraft_content::parse(&copied.content).ops.iter().filter(|o| o.is("q")).count(), 3, "balanced: {content}");
+    // Balanced, and the red box's own `q … Q`, which keeps nothing, left out (Thai edition).
+    let ops = pdfcraft_content::parse(&copied.content).ops;
+    assert_eq!(ops.iter().filter(|o| o.is("q")).count(), 2, "{content}");
+    assert_eq!(ops.iter().filter(|o| o.is("Q")).count(), 2, "balanced: {content}");
 }
 
 #[test]
@@ -225,4 +228,59 @@ fn copying_and_pasting_refuse_what_they_cannot_do_and_change_nothing() {
     assert_eq!(ops.iter().filter(|o| o.is("BT")).count(), ops.iter().filter(|o| o.is("ET")).count());
     let mut work = stray.clone();
     paste_objects(&mut work, 1, &copied, [0.0, 0.0]).unwrap();
+}
+
+/// Word draws every paragraph inside a clip of the whole page (Thai edition). Pasted 100 pt to
+/// the left, that clip came along and ended 100 pt short of the page's right edge; the copy's
+/// text, moved right afterwards, was cut off there. A clip that holds the whole page clips
+/// nothing on it, so the copy leaves it out; a smaller clip still comes along.
+#[test]
+fn a_copy_leaves_out_a_clip_of_the_whole_page_and_its_text_moves_past_where_it_ended() {
+    let word = "q 0.000008869 0 300 300 re W* n BT /F1 24 Tf 150 150 Td (Wide) Tj ET Q";
+    let mut doc = two_pages(word, "");
+    let copied = copy_objects(&doc, 0, &[target(&doc, 0, |o| o.text.as_deref() == Some("Wide"))]).unwrap();
+    let content = String::from_utf8_lossy(&copied.content).into_owned();
+    assert!(!content.contains(" re"), "no clip of the whole page: {content}");
+    paste_objects(&mut doc, 1, &copied, [-100.0, 0.0]).unwrap();
+    let pasted = target(&doc, 1, |o| o.text.as_deref() == Some("Wide"));
+    crate::move_objects(&mut doc, 1, &[pasted], [140.0, 0.0]).unwrap();
+    let page = render(&doc, 1);
+    let inked = |r| pixels(&page, r, [0.0, 0.0]).chunks(4).any(|p| p != [255, 255, 255, 255]);
+    assert!(inked([210.0, 140.0, 240.0, 180.0]), "the moved text is drawn past x 200, where the moved page clip ended");
+
+    // A clip smaller than the page is the copy's to keep.
+    let doc = two_pages("q 10 10 280 280 re W n BT /F1 24 Tf 150 150 Td (Wide) Tj ET Q", "");
+    let copied = copy_objects(&doc, 0, &[target(&doc, 0, |o| o.text.as_deref() == Some("Wide"))]).unwrap();
+    assert!(String::from_utf8_lossy(&copied.content).contains(" re"));
+}
+
+/// Thai edition: a `q … Q` before the selection that keeps nothing is left out of the copy, so a
+/// paste is no larger than what it draws needs. Every copy carried all of the page's state before
+/// its objects; a page pasted on again and again passed 100 000 operations, and copying its
+/// objects was refused ("too many content operations for group selection").
+#[test]
+fn a_copy_leaves_out_the_state_that_ends_before_its_objects() {
+    let mut source = String::new();
+    for i in 0..200 {
+        source.push_str(&format!("q 1 0 0 1 {i} 0 cm 0 0 1 rg BT /F1 9 Tf 2 Tr 0 0 Td ( ) Tj ET 5 5 m 6 6 l S Q "));
+    }
+    source.push_str("BT /F1 24 Tf 20 150 Td (Kept) Tj ET");
+    let doc = two_pages(&source, "");
+    let copied = copy_objects(&doc, 0, &[target(&doc, 0, |o| o.text.as_deref() == Some("Kept"))]).unwrap();
+    let ops = pdfcraft_content::parse(&copied.content).ops;
+    assert!(ops.len() < 20, "only what draws the copy: {} operations", ops.len());
+    let mut pasted = doc.clone();
+    paste_objects(&mut pasted, 1, &copied, [0.0, 0.0]).unwrap();
+    assert!(editable_objects(&pasted, 1).unwrap().iter().any(|o| o.text.as_deref() == Some("Kept")));
+}
+
+/// Thai edition: a copy pasted a line below the paragraph it came from stays a paragraph of its
+/// own. Both untagged, the copy was read in the paragraph's region, and joined it as its second row.
+#[test]
+fn a_copy_pasted_a_line_below_its_paragraph_stays_apart() {
+    let mut doc = two_pages("BT /F1 24 Tf 20 150 Td (Heading) Tj ET", "");
+    let copied = copy_objects(&doc, 0, &[target(&doc, 0, |o| o.text.as_deref() == Some("Heading"))]).unwrap();
+    paste_objects(&mut doc, 0, &copied, [18.0, -24.0]).unwrap();
+    let texts: Vec<_> = editable_objects(&doc, 0).unwrap().into_iter().filter_map(|o| o.text).collect();
+    assert_eq!(texts, ["Heading", "Heading"], "two paragraphs, not one of two rows");
 }

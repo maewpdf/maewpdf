@@ -338,6 +338,8 @@ fn native_script_prompt_uses_the_german_catalog_when_available() {
 #[test]
 /// A real UI menu followed by input resumes once and does not leak the menu click into the next modal.
 fn native_button_popup_and_response_resume_without_replaying_the_script() {
+    // It draws with the GPU, which only one test may use at a time: two at once crashed the run.
+    let _gpu = crate::gpu();
     for typed in [false, true] {
         let mut h = harness();
         let id = h.state().active_ids().unwrap().1;

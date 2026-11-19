@@ -478,6 +478,10 @@ pub(super) struct Shown {
     pub(super) visual_order: bool,
     pub(super) decodable: bool,
     pub(super) scope: Option<usize>,
+    /// The text group it is drawn in (Thai edition; [`TEXT_GROUP_TAG`]).
+    pub(super) group: Option<u32>,
+    /// The box size it is drawn in (Thai edition; [`TEXT_BOX_TAG`]).
+    pub(super) boxed: Option<[f64; 4]>,
     pub(super) paint: Paint,
     pub(super) logical_order: bool,
     pub(super) actual_text: bool,
@@ -693,9 +697,27 @@ type Invocation = (usize, Vec<u8>, Ts);
 #[derive(Default)]
 struct MarkedContent {
     regions: Vec<Option<usize>>,
+    /// The text group of each open sequence (Thai edition: `/PCGroup <</G n>> BDC`, what Merge
+    /// text boxes writes round each piece of a group), inherited by the sequences inside it.
+    groups: Vec<Option<u32>>,
+    /// The box size of each open sequence (Thai edition: `/PCBox <</W w /H h>> BDC`, what a
+    /// paragraph's box dragged larger than its text writes round it), inherited inside it.
+    boxes: Vec<Option<[f64; 4]>>,
     layers: Vec<Option<Vec<u8>>>,
     actual_text: Vec<Option<(usize, usize, String)>>,
 }
+
+/// The marked-content tag Merge text boxes writes round each piece of a group of text (Thai
+/// edition), with the group's number as `/G` in its properties. It isn't a paragraph region tag,
+/// so the text in it keeps the paragraphs it had.
+pub(crate) const TEXT_GROUP_TAG: &[u8] = b"PCGroup";
+
+/// The marked-content tag round a paragraph whose box was dragged to a size of its own (Thai
+/// edition): `/W` its width and `/H` its height (user space) from its first line's top, and `/A`
+/// where its text is aligned in it (0 left, the default; 1 centred; 2 right), which places it,
+/// and `/X` the room left of left-aligned text (its left edge dragged out past the text).
+/// The text keeps its size; the box only says where it wraps and how far it reaches.
+pub(crate) const TEXT_BOX_TAG: &[u8] = b"PCBox";
 
 impl MarkedContent {
     fn begin(&mut self, doc: &Document, op: &Op, index: usize, logical_text: Option<&Dict>, shown_count: usize) {
@@ -703,6 +725,24 @@ impl MarkedContent {
         // inner spans, which inherit their enclosing region.
         let region = matches!(op.name(0), Some(b"P" | b"H" | b"H1" | b"H2" | b"H3" | b"H4" | b"H5" | b"H6" | b"LI" | b"TD" | b"TH"));
         self.regions.push(if region { Some(index) } else { self.regions.last().copied().flatten() });
+        let group = (op.is("BDC") && op.name(0) == Some(TEXT_GROUP_TAG))
+            .then(|| op.operands.get(1).and_then(Object::as_dict).and_then(|d| d.get(b"G")).and_then(Object::as_int))
+            .flatten()
+            .and_then(|g| u32::try_from(g).ok());
+        self.groups.push(group.or_else(|| self.groups.last().copied().flatten()));
+        let boxed = (op.is("BDC") && op.name(0) == Some(TEXT_BOX_TAG))
+            .then(|| {
+                let d = op.operands.get(1).and_then(Object::as_dict)?;
+                let w = d.get(b"W").and_then(Object::as_f64).filter(|v| v.is_finite() && *v > 0.0 && *v < 1e6)?;
+                let h = d.get(b"H").and_then(Object::as_f64).filter(|v| v.is_finite() && *v >= 0.0 && *v < 1e6).unwrap_or(0.0);
+                // Where the text sits in it: 0 at its left, 1 in its middle, 2 at its right.
+                let a = d.get(b"A").and_then(Object::as_int).filter(|a| (0..=2).contains(a)).unwrap_or(0) as f64;
+                // Room left of left-aligned text: the box's left edge dragged out past it.
+                let x = d.get(b"X").and_then(Object::as_f64).filter(|v| v.is_finite() && *v >= 0.0 && *v < w).unwrap_or(0.0);
+                Some([w, h, a, x])
+            })
+            .flatten();
+        self.boxes.push(boxed.or_else(|| self.boxes.last().copied().flatten()));
         // A layer named in the resources is told apart by its name, an inline one by where it opens.
         let layer = op.is("BDC") && op.name(0) == Some(b"OC".as_slice());
         self.layers
@@ -721,6 +761,8 @@ impl MarkedContent {
 
     fn end(&mut self, index: usize, shown: &mut Vec<Shown>) {
         self.regions.pop();
+        self.groups.pop();
+        self.boxes.pop();
         self.layers.pop();
         if let Some(Some((start, open, logical))) = self.actual_text.pop() {
             let tail = shown.split_off(start.min(shown.len()));
@@ -732,23 +774,51 @@ impl MarkedContent {
                     // box starts at the first glyph. An indent the text opens with, and the gaps
                     // after the first glyph (a subset's spaces, #4229), are.
                     let mut boxed = first.glyph_count > 0 || logical.starts_with(char::is_whitespace);
+                    // Likewise a gap after the last glyph (the shift back a group move puts behind
+                    // it): boxed, a part of a two-colour paragraph moved left reached back to where
+                    // it had been, overlapped the next part, and the paragraph broke in two (Thai
+                    // edition). Gaps are held until a glyph follows them, or the text ends in a
+                    // blank they stand for.
+                    let mut held: Option<([f64; 4], [f64; 4])> = None;
+                    let grow = |first: &mut Shown, rect: [f64; 4], frame: [f64; 4]| {
+                        first.rect = [first.rect[0].min(rect[0]), first.rect[1].min(rect[1]), first.rect[2].max(rect[2]), first.rect[3].max(rect[3])];
+                        first.frame = union(first.frame, frame);
+                    };
                     for item in items {
                         first.glyph_count = first.glyph_count.saturating_add(item.glyph_count);
                         first.extra_ops.push(item.op);
                         first.extra_ops.extend(item.extra_ops);
                         if !boxed && item.glyph_count > 0 {
                             (first.rect, first.frame) = (item.rect, item.frame);
+                            // And it starts where that glyph does (Thai edition): its text matrix,
+                            // rise and baseline. Read from the gap, a part moved a second time
+                            // kept the rise of the first move (the gap isn't moved again), sat a
+                            // move's height off the rest of its row, and the row broke in three.
+                            (first.tm, first.tlm, first.baseline) = (item.tm, item.tlm, item.baseline);
+                            first.state = item.state.clone();
                             boxed = true;
+                        } else if boxed && item.glyph_count == 0 {
+                            held = Some(held.map_or((item.rect, item.frame), |(r, f)| {
+                                (
+                                    [r[0].min(item.rect[0]), r[1].min(item.rect[1]), r[2].max(item.rect[2]), r[3].max(item.rect[3])],
+                                    union(f, item.frame),
+                                )
+                            }));
                         } else if boxed {
-                            first.rect = [
-                                first.rect[0].min(item.rect[0]),
-                                first.rect[1].min(item.rect[1]),
-                                first.rect[2].max(item.rect[2]),
-                                first.rect[3].max(item.rect[3]),
-                            ];
-                            first.frame = union(first.frame, item.frame);
+                            // The gaps before this glyph lie between it and the box already
+                            // (a subset's spaces, #4229), which growing to the glyph covers.
+                            // Grown by the gaps themselves, a move's shift back behind each
+                            // glyph and forward before the next (Thai text drawn a glyph at a
+                            // time, as added text converted to page text is) reached a move's
+                            // length past the text: the moved paragraph's box ran 100 points
+                            // wide and its frame and text came apart (Thai edition).
+                            held = None;
+                            grow(&mut first, item.rect, item.frame);
                         }
                         first.ink.extend(item.ink);
+                    }
+                    if let Some((rect, frame)) = held.filter(|_| logical.ends_with(char::is_whitespace)) {
+                        grow(&mut first, rect, frame);
                     }
                     first.extra_ops.extend([open, index]);
                     // Only right-to-left ActualText is already in typing order and must stay out of
@@ -986,6 +1056,8 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         visual_order: m.visual_order,
         decodable,
         scope: marked.regions.last().copied().flatten(),
+        group: marked.groups.last().copied().flatten(),
+        boxed: marked.boxes.last().copied().flatten(),
         paint: Paint { layers: marked.layers.iter().flatten().cloned().collect(), gs: ts.gs.clone() },
         logical_order: false,
         actual_text: false,

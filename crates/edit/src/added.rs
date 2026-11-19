@@ -17,6 +17,7 @@ use crate::{EditError, MarkKind, check, contents, matrix_number, n, page_list, p
 mod draw;
 mod layout;
 mod store;
+pub(crate) use store::added_stream;
 mod types;
 
 #[cfg(test)]

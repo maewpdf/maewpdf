@@ -620,6 +620,23 @@ fn moved_picture(
     painter.add(egui::Shape::mesh(mesh));
 }
 
+/// The picture alone at `corners` (its top left, top right, bottom right and bottom left, turned
+/// as they may be), over what it covered at `blank`, on its page only (Thai edition).
+fn turned_picture(painter: &egui::Painter, xf: &PageXform, tex: egui::TextureId, under: Option<egui::TextureId>, blank: Rect, corners: [Pos2; 4]) {
+    let on_page = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
+    cover(&on_page, xf, under, blank);
+    if !corners.iter().all(|p| p.x.is_finite() && p.y.is_finite()) {
+        return;
+    }
+    let mut mesh = egui::Mesh::with_texture(tex);
+    for (pos, uv) in corners.into_iter().zip([Pos2::new(0.0, 0.0), Pos2::new(1.0, 0.0), Pos2::new(1.0, 1.0), Pos2::new(0.0, 1.0)]) {
+        mesh.vertices.push(egui::epaint::Vertex { pos, uv, color: Color32::WHITE });
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    on_page.add(egui::Shape::mesh(mesh));
+}
+
 fn mapped_picture(painter: &egui::Painter, xf: &PageXform, tex: egui::TextureId, from: [Pos2; 4], to: [Pos2; 4]) {
     let mut mesh = egui::Mesh::with_texture(tex);
     for (from, to) in from.into_iter().zip(to) {
@@ -990,6 +1007,12 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
                 let v = c - centre;
                 centre + egui::vec2(v.x * cos - v.y * sin, v.x * sin + v.y * cos)
             };
+            // The picture turns with the frame (Thai edition): only the frame showed, the picture
+            // gone from the page until the button was up.
+            if let Some((tex, corners)) = own_picture(view, xf, info, page, i, image) {
+                let under = view.image_drag_under.as_ref().and_then(|u| u.texture(page, i));
+                turned_picture(painter, xf, tex, under, b, corners.map(turn));
+            }
             let outline = obb.corners().map(turn).to_vec();
             painter.add(egui::Shape::closed_line(outline, Stroke::new(1.5, ACCENT)));
             let galley = painter.layout_no_wrap(format!("{degrees:.0}\u{b0}"), egui::FontId::proportional(12.0), ACCENT);

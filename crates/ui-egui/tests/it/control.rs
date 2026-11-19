@@ -142,6 +142,8 @@ fn thumbnail_size_is_settable_and_inspectable_through_the_control_channel() {
 
 #[test]
 fn form_tab_numbers_can_be_shown_and_captured_through_the_control_channel() {
+    // It draws with the GPU, which only one test may use at a time: two at once crashed the run.
+    let _gpu = crate::gpu();
     let (mut h, c) = harness();
     h.state_mut().open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
     h.run_steps(3);
@@ -1473,6 +1475,8 @@ fn drawing_a_comment_by_drag_and_its_context_menu() {
 
 #[test]
 fn screenshots_of_window_and_region() {
+    // It draws with the GPU, which only one test may use at a time: two at once crashed the run.
+    let _gpu = crate::gpu();
     let (mut h, c) = harness();
     // The harness makes its GPU renderer on the first render. The app has one before the control
     // channel answers anything, so make it here, outside the screenshot's 5 s deadline: with 16

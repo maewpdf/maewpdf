@@ -41,7 +41,10 @@ pub(crate) fn look_of(doc: &Document, page: usize, target: ObjectTarget) -> Opti
         ObjectKind::Text => {
             let b = doc.text_blocks(page).into_iter().nth(target.index)?;
             let align = rows_align(&b, &doc.text_lines(page));
-            Some(Look { text: AddedText { align, ..crate::edit_text_ui::look_of(&b) }, source_font: Some(b.base_font) })
+            // An OCR row's font is nobody's choice (Thai edition): it shows as what draws it, not
+            // the font it was read in (Helvetica for a row of English words).
+            let source_font = (!b.invisible).then(|| b.base_font.clone());
+            Some(Look { text: AddedText { align, ..crate::edit_text_ui::look_of(&b) }, source_font })
         }
         ObjectKind::Added => match &doc.added().iter().filter(|a| a.page == page).nth(target.index)?.content {
             AddedContent::Text(t) => Some(Look { text: t.clone(), source_font: None }),
@@ -69,10 +72,22 @@ fn rows_align(b: &pdfcraft_engine::TextBlock, lines: &[pdfcraft_engine::TextLine
             (x0.is_finite() && x1.is_finite()).then_some((x0, x1))
         })
         .collect();
+    let tol = (b.size * 0.3).max(1.0);
+    // One row in a box of its own sits in that box: centred when the room either side matches,
+    // right when it reaches the box's right edge from further in (Thai edition). It used to show
+    // as left wherever it sat, and Align left on a row right-aligned in its box changed nothing.
+    if let ([(x0, x1)], Some(f)) = (spans.as_slice(), b.frame) {
+        let (left, right) = (x0 - f[0].min(f[2]), f[0].max(f[2]) - x1);
+        return match () {
+            _ if left <= tol => TextAlign::Left,
+            _ if (left - right).abs() <= tol => TextAlign::Center,
+            _ if right <= tol => TextAlign::Right,
+            _ => TextAlign::Left,
+        };
+    }
     if spans.len() < 2 {
         return TextAlign::Left;
     }
-    let tol = (b.size * 0.3).max(1.0);
     let same = |f: &dyn Fn(&(f64, f64)) -> f64| {
         let v: Vec<f64> = spans.iter().map(f).collect();
         let (lo, hi) = v.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), x| (lo.min(*x), hi.max(*x)));
@@ -176,6 +191,12 @@ pub(crate) fn restyle_edit(
                 if style.underline.is_none() && differs(change.underline, |r| r.underline) {
                     style.underline = change.underline;
                 }
+                // An OCR row (Thai edition) is drawn in the colour picked, even the black its
+                // invisible text reads as: it has no parts to carry it (`paragraph_runs`), and
+                // black picked for it was dropped as no change.
+                if b.invisible {
+                    style.color = style.color.or(change.color);
+                }
                 if !runs.is_empty() {
                     style.color = style.color.or(change.color);
                     style.size = style.size.or(change.size);
@@ -211,7 +232,8 @@ pub(crate) fn restyle_edit(
                 }
                 // Aligned inside its own box (Thai edition): a single line would otherwise grow
                 // to the page's margin and be aligned there.
-                if style.align.is_some() && b.rotation == 0.0 {
+                // A paragraph with a box of its own is aligned in that box, which it keeps.
+                if style.align.is_some() && b.rotation == 0.0 && b.frame.is_none() {
                     let own = b.rect[2] - b.rect[0];
                     // A point to spare, so measuring the text again never wraps its last word.
                     style.width = (own.is_finite() && own > 0.0).then_some(own + 1.0);
@@ -222,7 +244,12 @@ pub(crate) fn restyle_edit(
                 }
                 // A paragraph of one line stays one line when a face or size makes it wider
                 // (Thai edition): rewrapped at its old width, its last words fell to a new line.
-                if style.width.is_none() && b.rotation == 0.0 && b.rows.len() <= 1 && (style.family.is_some() || style.size.is_some()) {
+                if style.width.is_none()
+                    && b.frame.is_none()
+                    && b.rotation == 0.0
+                    && b.rows.len() <= 1
+                    && (style.family.is_some() || style.size.is_some())
+                {
                     let own = b.rect[2] - b.rect[0];
                     let grow = style.size.map_or(1.0, |s| s / b.size.max(0.1)).max(1.0);
                     style.width = (own.is_finite() && own > 0.0).then_some(own * grow * 1.5 + 2.0);

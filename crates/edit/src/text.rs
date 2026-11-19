@@ -37,6 +37,21 @@ mod lines;
 mod rewrite;
 mod underline;
 
+/// Thai edition: the operators that draw paragraphs `indexes`' own underlines on `page` (the rules
+/// a rewrite drew under them), so a copy of them takes their underlines too.
+pub(crate) fn underline_ops(doc: &Document, page: usize, ops: &[Op], indexes: &[usize]) -> Result<Vec<usize>, EditError> {
+    let lines = text_lines(doc, page)?;
+    let blocks = group_blocks(&lines);
+    let mut found = Vec::new();
+    for b in indexes.iter().filter_map(|i| blocks.get(*i)) {
+        let members: Vec<&TextLine> = b.lines.iter().filter_map(|i| lines.get(*i)).collect();
+        for range in underline::own_underlines(ops, &members) {
+            found.extend(range);
+        }
+    }
+    Ok(found)
+}
+
 #[cfg(test)]
 use blocks::wrap;
 pub use blocks::{
@@ -67,8 +82,9 @@ pub(crate) use lines::{
 pub use lines::{MAX_FORM_DEPTH, MAX_FORM_VISITS, glyph_text_lines, lift_paragraph, paragraph_stream, text_lines};
 use lines::{page_dict, word_lines};
 pub use rewrite::{LineEdit, replace_line, rewrite_block};
+pub(crate) use rewrite::{blocks_in_streams, group_text, paragraph_ops, reveal_ops, selectable_blocks, show_starts, translate_blocks, wrap_in_marks};
+pub(crate) use rewrite::{box_marks, boxed_style, coincident_underlines};
 use rewrite::{coincident_ops, rewrite_block_from};
-pub(crate) use rewrite::{paragraph_ops, reveal_ops, selectable_blocks, show_starts, translate_blocks};
 #[cfg(test)]
 pub(crate) use rewrite::{replace_line_with_limit, rewrite_block_with_limit};
 
@@ -139,6 +155,12 @@ pub struct TextLine {
     soft_gap: usize,
     /// Each show of the line as drawn, in content order (Thai edition: [`lift_paragraph`]).
     placed: Vec<Placed>,
+    /// The text group it belongs to (Thai edition: Merge text boxes); lines of different groups
+    /// are never one line or one paragraph.
+    group: Option<u32>,
+    /// The box size its paragraph was given (Thai edition: [`interp::TEXT_BOX_TAG`]): width and
+    /// height in user space. Lines in another box, or none, are never one line or paragraph.
+    boxed: Option<[f64; 4]>,
 }
 
 /// A show of a [`TextLine`] as drawn: its operator (and those an `/ActualText` span joined to it),
@@ -266,6 +288,8 @@ mod tests {
             invisible: false,
             underlined: false,
             underlined_parts: Vec::new(),
+            group: None,
+            frame: None,
         }
     }
 

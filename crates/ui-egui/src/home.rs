@@ -93,14 +93,23 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     // Unofficial edition: no ArtCraft marks or community card (docs/brand/LICENSE-brand.txt);
                     // questions about this build go to its own repository.
                     ui.set_width(ui.available_width());
+                    // The mark is as tall as the three lines beside it (Thai edition): their height
+                    // is measured as they are laid out and used from the next frame on.
+                    let measured = ui.scope_id().with("thai-edition-lines");
+                    let lines = ui.ctx().data(|d| d.get_temp::<f32>(measured)).filter(|h| h.is_finite() && *h > 0.0).unwrap_or(66.0);
                     ui.horizontal(|ui| {
-                        crate::thai_edition_mark(ui, 56.0);
-                        ui.add_space(6.0);
-                        ui.vertical(|ui| {
+                        crate::thai_edition_mark(ui, lines);
+                        ui.add_space(10.0);
+                        let column = ui.vertical(|ui| {
                             ui.label(egui::RichText::new(crate::THAI_EDITION_NOTE).font(theme::semibold(15.0)));
                             ui.label(egui::RichText::new(crate::THAI_EDITION_AUTHOR).color(t.text_muted));
                             ui.hyperlink(crate::THAI_EDITION_SITE);
                         });
+                        let height = column.response.rect.height();
+                        if (height - lines).abs() > 0.5 {
+                            ui.ctx().data_mut(|d| d.insert_temp(measured, height));
+                            ui.ctx().request_repaint();
+                        }
                     });
                 });
             ui.add_space(22.0);

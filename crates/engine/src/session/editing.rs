@@ -580,6 +580,7 @@ impl Session {
                     | Edit::MovePageImageToPage { .. }
                     | Edit::ArrangeContent { .. }
                     | Edit::ArrangeParagraph { .. }
+                    | Edit::GroupText { .. }
                     | Edit::ReplaceImage { .. }
                     | Edit::PasteContent { .. }
                     | Edit::EditPageImage { .. }
@@ -732,10 +733,22 @@ fn cover_scanned_word(edit: Edit, info: &DocInfo, editor: &Editor) -> Edit {
             // Only invisible text is sampled; the blocks are usually cached from opening it.
             if style.cover.is_none()
                 && let Some(info) = info.pages.get(page)
-                && let Some(b) = editor.text_blocks(page).ok().and_then(|b| b.get(block).filter(|b| b.invisible).cloned())
-                && let Some((paper, ink)) = guard(|| scan_colours::sample(&editor.cos, info, page, &b)).ok().flatten()
+                && let Some(blocks) = editor.text_blocks(page).ok()
+                && let Some(b) = blocks.get(block).filter(|b| b.invisible).cloned()
+                && let Some((paper, ink, patches, holes)) = guard(|| {
+                    // The page's other paragraphs: ink in their boxes is theirs (Thai edition).
+                    let others: Vec<[f64; 4]> = blocks.iter().enumerate().filter(|(i, _)| *i != block).map(|(_, o)| o.rect).collect();
+                    scan_colours::sample(&editor.cos, info, page, &b, &others)
+                })
+                .ok()
+                .flatten()
             {
                 style.cover = Some(paper);
+                // The scanned word's letters past its box are covered too, each piece alone
+                // (Thai edition).
+                style.cover_extra = patches;
+                // Other words' ink inside its box stays shown (Thai edition).
+                style.cover_keep = holes;
                 style.color = style.color.or(Some(ink));
                 // A text edit alone leaves the words it doesn't change as the scan shows them.
                 style.changed_words_only = plain;

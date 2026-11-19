@@ -58,15 +58,23 @@ pub(crate) fn thai_edition_mark(ui: &mut egui::Ui, height: f32) -> egui::Respons
             decoded
         }
     };
-    let size = match &texture {
-        Some(t) if t.size()[1] > 0 => egui::vec2(height * t.size()[0] as f32 / t.size()[1] as f32, height),
-        _ => egui::vec2(height * 0.75, height),
-    };
-    match texture {
-        Some(t) => ui.add(egui::Image::new((t.id(), size)).alt_text("MaewPDF")),
-        None => ui.allocate_response(size, egui::Sense::hover()),
+    // The cat stands on a rounded amber tile, the app icon's (thai/brand/icons: its colour and
+    // corner), so the mark and the icon look alike.
+    let (tile, response) = ui.allocate_exact_size(egui::vec2(height, height), egui::Sense::hover());
+    ui.painter().rect_filled(tile, height * THAI_EDITION_TILE_CORNER, THAI_EDITION_TILE);
+    if let Some(t) = texture.filter(|t| t.size()[1] > 0) {
+        let tall = height * 0.86;
+        let size = egui::vec2(tall * t.size()[0] as f32 / t.size()[1] as f32, tall);
+        egui::Image::new((t.id(), size)).paint_at(ui, egui::Rect::from_center_size(tile.center(), size));
     }
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, "MaewPDF"));
+    response
 }
+
+/// The app icon's tile colour (thai/brand/icons `TILE`), behind the mark.
+const THAI_EDITION_TILE: egui::Color32 = egui::Color32::from_rgb(0xFF, 0x9F, 0x1C);
+/// The app icon's corner radius as a share of the tile's side (thai/brand/icons `CORNER`).
+const THAI_EDITION_TILE_CORNER: f32 = 112.0 / 512.0;
 
 /// The mark's size and 8-bit RGBA pixels; `None` for anything else (it ships as 8-bit RGBA).
 fn thai_edition_mark_pixels(png_bytes: &[u8]) -> Option<([usize; 2], Vec<u8>)> {
@@ -813,6 +821,9 @@ pub struct PdfCraftApp {
     pub object_clipboard: Option<pdfcraft_engine::ObjectClipboard>,
     /// What copying them put on the system clipboard (see [`app::ObjectClipMark`]).
     pub(crate) object_clip_mark: app::ObjectClipMark,
+    /// The pass the objects were copied in (Thai edition): a copy in any later pass (a text
+    /// field's, a text box's) is newer, and ⌘V pastes it instead.
+    pub(crate) object_copy_pass: u64,
     /// Files dropped on the page grid, waiting for the pointer to say which gap they go to.
     grid_drop: Option<GridDrop>,
     /// The last snapshot (width, height, RGBA); `system_clipboard` also puts it on the

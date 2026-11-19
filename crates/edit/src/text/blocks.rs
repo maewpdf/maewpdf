@@ -40,6 +40,13 @@ pub struct TextBlock {
     /// The parts of `editor_text` (bytes) drawn with such an underline (Thai edition): a part
     /// underlined on its own shows so in the editor. Set by [`text_blocks`].
     pub underlined_parts: Vec<std::ops::Range<usize>>,
+    /// The text group it belongs to (Thai edition): paragraphs merged with Merge text boxes keep
+    /// their own text and place and are handled together.
+    pub group: Option<u32>,
+    /// The box it was given (Thai edition), `[left, bottom, right, top]` in user space, when its
+    /// box was dragged to a size of its own: from its first line's left and top, never smaller
+    /// than its text. Its text wraps at the box's width. `None`: the box is the text's.
+    pub frame: Option<[f64; 4]>,
 }
 
 impl TextBlock {
@@ -426,7 +433,9 @@ pub fn clear_block(doc: &mut Document, page: usize, block: usize) -> Result<(), 
         patches.insert(s.op, replacement);
     }
     // Its underline goes from behind the editor too (Thai edition).
-    let underlines: std::collections::HashSet<usize> = super::underline::indexes(&super::underline::own_underlines(&ops, &targets)).collect();
+    // And those of the copies drawn over it, whose text goes with it.
+    let mut underlines: std::collections::HashSet<usize> = super::underline::indexes(&super::underline::own_underlines(&ops, &targets)).collect();
+    underlines.extend(super::rewrite::coincident_underlines(&ops, &lines, &targets));
     let data = splice(&pieces, &ops, |i| patches.remove(&i).map_or((Vec::new(), !underlines.contains(&i)), |v| (v, false)));
     let contents = rewritten_contents(doc, &streams, data)?;
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
@@ -578,6 +587,19 @@ pub struct BlockStyle {
     pub offset: Option<[f64; 2]>,
     /// Rewrap to this width in user space (dragging the box's edge).
     pub width: Option<f64>,
+    /// The box's height in user space, from the first line's top (Thai edition: dragging its
+    /// top or bottom edge). Its text keeps its size; the box reaches this far down.
+    pub height: Option<f64>,
+    /// Room left of left-aligned text inside its box, in user space (Thai edition: the box's left
+    /// edge dragged out past its text, which stays where it is). Part of `width`.
+    pub left_room: Option<f64>,
+    /// Fit the box to its text again (Thai edition: a double click on a grip of its box): the
+    /// size it was given is dropped and the text stays where it is.
+    pub fit_box: bool,
+    /// The box size written round the rewritten paragraph (Thai edition): set by
+    /// [`crate::text::rewrite_block`] from `width`, `height` and the box it had.
+    #[doc(hidden)]
+    pub frame: Option<[f64; 4]>,
     /// For an invisible paragraph ([`TextBlock::invisible`]): fill its old area with this colour
     /// (RGB 0–1) before the new text, hiding the scanned word beneath it.
     pub cover: Option<[f64; 3]>,
@@ -594,6 +616,15 @@ pub struct BlockStyle {
     /// How far across [`BlockStyle::cover`] may reach, whatever its padding: the edges of the words
     /// on either side that stay (user space).
     pub cover_between: Option<[f64; 2]>,
+    /// Patches [`BlockStyle::cover`] also fills, in user space `[left, bottom, right, top]` (Thai
+    /// edition): the pieces of the scanned word's own ink past the box recognition gave it (the
+    /// head of a ห to its left, a tone mark above it), each covered alone. Growing every line's
+    /// box to reach them covered the lines above and below as well.
+    pub cover_extra: Vec<[f64; 4]>,
+    /// Holes left in [`BlockStyle::cover`], in user space `[left, bottom, right, top]` (Thai edition):
+    /// other words' ink reaching into the box recognition gave this one (a tone mark of the line
+    /// below), which covering the box had hidden.
+    pub cover_keep: Vec<[f64; 4]>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

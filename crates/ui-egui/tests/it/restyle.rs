@@ -138,6 +138,8 @@ fn the_format_painter_gives_a_paragraph_the_look_of_another() {
 /// the one left out; moving away takes it back, and nothing is applied.
 #[test]
 fn format_text_previews_on_every_selected_paragraph() {
+    // It draws with the GPU, which only one test may use at a time: two at once crashed the run.
+    let _gpu = crate::gpu();
     let mut h = harness();
     let (alpha, bravo) = (at(&h, 280.0), at(&h, 220.0));
     click(&mut h, alpha, Modifiers::NONE);
@@ -206,6 +208,62 @@ fn a_selected_paragraph_loses_its_underline_from_format_text() {
     h.get_by_label("Underline").click();
     h.run_steps(5);
     assert!(!underlined(&h), "plain again");
+}
+
+/// Owner's report (Thai edition): a row with room left of it in its box (its left edge dragged
+/// out) showed as left-aligned, so Align left from Format text changed nothing; centre and right
+/// did. Align left now takes it to the box's left edge, the box as it was. A row right-aligned in
+/// its box shows as right.
+#[test]
+fn align_left_takes_a_row_to_its_boxs_left_edge() {
+    let mut h = harness();
+    let block = |h: &Harness<'static, PdfCraftApp>| {
+        let app = h.state();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        doc.text_blocks(0).into_iter().find(|b| b.text == "Alpha").expect("Alpha")
+    };
+    let before = block(&h);
+    let index = {
+        let app = h.state();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        doc.text_blocks(0).iter().position(|b| b.text == "Alpha").unwrap()
+    };
+    let w = before.rect[2] - before.rect[0];
+    let style = pdfcraft_engine::BlockStyle { width: Some(w + 100.0), left_room: Some(100.0), ..Default::default() };
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::EditTextBlock { page: 0, block: index, text: before.reflow_text.clone(), style });
+    h.run_steps(3);
+    let boxed = block(&h);
+    let f = boxed.frame.expect("a box of its own");
+    assert!((boxed.rect[0] - (f[0] + 100.0)).abs() < 1.0, "room left of it: {:?} in {f:?}", boxed.rect);
+    // Selected on its text, which is where it still sits.
+    let alpha = at(&h, 280.0);
+    click(&mut h, alpha, Modifiers::NONE);
+    h.get_by_label("1 object selected");
+    h.get_by_label("Alignment").click();
+    h.run_steps(2);
+    h.get_by_label("Align left").click();
+    h.run_steps(5);
+    let left = block(&h);
+    assert!((left.rect[0] - f[0]).abs() < 1.0, "at the box's left edge: {:?} in {f:?}", left.rect);
+    assert!(left.frame.is_some_and(|g| (g[0] - f[0]).abs() < 1.0 && (g[2] - f[2]).abs() < 1.0), "the box as it was: {:?}", left.frame);
+
+    // Room either side, more to the right: it shows as left, and Align left clicked again (the
+    // alignment already shown) still takes it to the box's left edge.
+    let style = pdfcraft_engine::BlockStyle { width: Some(w + 160.0), left_room: Some(40.0), ..Default::default() };
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::EditTextBlock { page: 0, block: index, text: left.reflow_text.clone(), style });
+    h.run_steps(3);
+    let roomy = block(&h);
+    let g = roomy.frame.expect("a box of its own");
+    assert!((roomy.rect[0] - (g[0] + 40.0)).abs() < 1.0 && g[2] - roomy.rect[2] > 60.0, "room either side: {:?} in {g:?}", roomy.rect);
+    let alpha = at(&h, 280.0);
+    click(&mut h, alpha, Modifiers::NONE);
+    h.get_by_label("1 object selected");
+    h.get_by_label("Alignment").click();
+    h.run_steps(2);
+    h.get_by_label("Align left").click();
+    h.run_steps(5);
+    let again = block(&h);
+    assert!((again.rect[0] - g[0]).abs() < 1.0, "at the box's left edge again: {:?} in {g:?}", again.rect);
 }
 
 /// Owner's request (Thai edition): Text direction for a paragraph of the page, selected with a

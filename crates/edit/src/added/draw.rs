@@ -72,6 +72,12 @@ pub(super) fn draw_laid_shaped(
             ShapedScript::Thai => thai_error(e, &c.text),
             ShapedScript::Craft(_) => craft_error(t.family, e, &c.text),
         })?;
+    // Bold and italic text say so in their fonts' descriptors (Thai edition), drawn from the bold
+    // or italic face as they are: read back as regular, a rewrite of them (a part recoloured, a
+    // Ctrl+drag copy of a paragraph of several colours) redrew them in the regular face.
+    if t.bold || t.italic {
+        mark_style(doc, fonts, taken, t.bold, t.italic)?;
+    }
     out.extend(format!("BT {}\n", t.fill_op()).bytes());
     if t.char_spacing != 0.0 {
         out.extend(format!("{} Tc\n", n(t.char_spacing)).bytes());
@@ -340,6 +346,9 @@ pub(super) fn params(c: &Content) -> Dict {
             if let Some(name) = t.direction.name() {
                 d.set(b"Direction".to_vec(), Object::name(name));
             }
+            if t.fixed_height {
+                d.set(b"FixedHeight".to_vec(), Object::Bool(true));
+            }
         }
         Content::Image(i) => {
             d.set(b"Kind".to_vec(), Object::name("Image"));
@@ -420,4 +429,25 @@ pub(crate) fn thai_glyph_resources(
             Ok((name.clone(), vec![code]))
         })
         .collect()
+}
+
+/// Thai edition: the shaped fonts `fonts` holds that `taken` didn't (the ones just made) marked
+/// bold (`/FontWeight 700` and the ForceBold flag) and italic (the Italic flag and a slant) in
+/// their descriptors.
+fn mark_style(doc: &mut Document, fonts: &Dict, taken: &Dict, bold: bool, italic: bool) -> Result<(), EditError> {
+    let new: Vec<Object> = fonts.iter().filter(|(name, _)| name.starts_with(b"PCAr") && taken.get(name).is_none()).map(|(_, o)| o.clone()).collect();
+    for font in new {
+        let Some(Object::Ref(r)) = doc.dict(&font).and_then(|f| f.get(b"FontDescriptor").cloned()) else { continue };
+        let flags = doc.dict(&Object::Ref(r)).and_then(|d| d.get(b"Flags").and_then(Object::as_int)).unwrap_or(4);
+        doc.update_dict(r, |d| {
+            if bold {
+                d.set(b"FontWeight".to_vec(), Object::Int(700));
+            }
+            if italic {
+                d.set(b"ItalicAngle".to_vec(), Object::Int(-12));
+            }
+            d.set(b"Flags".to_vec(), Object::Int(flags | if bold { 262_144 } else { 0 } | if italic { 64 } else { 0 }));
+        })?;
+    }
+    Ok(())
 }

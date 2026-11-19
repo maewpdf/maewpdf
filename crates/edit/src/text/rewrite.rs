@@ -63,6 +63,12 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
     let pieces = joined(&streams);
     let ops = pieces.parse().ops;
     let first = target.ops.first().copied().filter(|i| *i < ops.len()).ok_or_else(|| EditError::Invalid("the page's content changed".into()))?;
+    // A line deleted takes its underlines, and those of the copies going with it (Thai edition):
+    // boxes selected together are deleted line by line, and their underlines stayed on the page.
+    if text.trim().is_empty() {
+        drops.extend(super::underline::indexes(&super::underline::own_underlines(&ops, &[&target])));
+        drops.extend(coincident_underlines(&ops, &lines, &[&target]));
+    }
     // The line's own font, when it can show every character.
     let font = fonts_res.get(target.font.as_bytes()).and_then(|f| doc.resolve(f).as_dict().cloned()).map(|d| Metrics::from_dict(doc, &d));
     let visual_indic = font.as_ref().is_some_and(|m| m.visual_order) || target.visual_order;
@@ -183,18 +189,30 @@ fn font_size_before(ops: &[Op], at: usize) -> Option<f64> {
 /// share box area when the leading is tighter than the font's ascent plus descent; its baseline
 /// is farther away, so it stays.
 pub(crate) fn coincident_ops(lines: &[TextLine], targets: &[&TextLine]) -> std::collections::HashSet<usize> {
+    coincident_lines(lines, targets).into_iter().flat_map(|line| line.ops.iter().copied()).collect()
+}
+
+/// The lines of `lines` that [`coincident_ops`] drops with `targets`.
+pub(crate) fn coincident_lines<'a>(lines: &'a [TextLine], targets: &[&TextLine]) -> Vec<&'a TextLine> {
     let area = |r: [f64; 4]| ((r[2] - r[0]) * (r[3] - r[1])).max(0.0);
-    let mut drop = std::collections::HashSet::new();
-    for line in lines {
-        let copy = targets.iter().any(|target| {
-            let same_text = line.text.trim() == target.text.trim() || (line.origin.state.render_mode == 3) != (target.origin.state.render_mode == 3);
-            same_text && overlaps_half(line.rect, target.rect, area) && on_same_baseline(line, target)
-        });
-        if copy {
-            drop.extend(line.ops.iter().copied());
-        }
-    }
-    drop
+    lines
+        .iter()
+        .filter(|line| {
+            targets.iter().any(|target| {
+                let same_text =
+                    line.text.trim() == target.text.trim() || (line.origin.state.render_mode == 3) != (target.origin.state.render_mode == 3);
+                same_text && overlaps_half(line.rect, target.rect, area) && on_same_baseline(line, target)
+            })
+        })
+        .collect()
+}
+
+/// The underlines (Thai edition) of the copies drawn over `targets` that go with them
+/// ([`coincident_lines`]): a copy's text went, its underlines stayed behind on the page, where
+/// nothing owned them any more and they couldn't be selected or deleted.
+pub(crate) fn coincident_underlines(ops: &[pdfcraft_content::Op], lines: &[TextLine], targets: &[&TextLine]) -> Vec<usize> {
+    let copies = coincident_lines(lines, targets);
+    super::underline::indexes(&super::underline::own_underlines(ops, &copies)).collect()
 }
 
 fn overlaps_half(a: [f64; 4], b: [f64; 4], area: impl Fn([f64; 4]) -> f64) -> bool {
@@ -236,6 +254,57 @@ pub(crate) fn rewrite_block_with_limit(
     max_glyphs: usize,
 ) -> Result<LineEdit, EditError> {
     TextSession::open(doc, page, block)?.commit_with_limit(doc, text, style, max_glyphs)
+}
+
+/// Thai edition: `style` with the box the paragraph keeps (`BlockStyle::frame`). A width or a
+/// height asked for gives it a box of its own; one it had stays, and its text wraps at its width.
+/// A paragraph with neither keeps the box its text makes.
+pub(crate) fn boxed_style(b: &TextBlock, lines: &[TextLine], style: &BlockStyle) -> BlockStyle {
+    let mut style = style.clone();
+    if style.fit_box {
+        style.frame = None;
+        return style;
+    }
+    let had = b.frame.map(|f| [f[2] - f[0], f[3] - f[1]]);
+    // The room left of the text it had (Thai edition): its box's left edge out past the text.
+    let room = b.frame.map_or(0.0, |f| (b.rect[0] - f[0]).max(0.0));
+    // Where its text sits in the box: as asked, else as it was written (0 left, 1 centred, 2 right).
+    let was = b.lines.iter().filter_map(|i| lines.get(*i)).find_map(|l| l.boxed).map_or(0.0, |f| f[2]);
+    if style.width.is_none() && style.height.is_none() && style.left_room.is_none() && had.is_none() {
+        return style;
+    }
+    let w = style.width.or(had.map(|h| h[0])).unwrap_or(b.rect[2] - b.rect[0]);
+    let h = style.height.or(had.map(|h| h[1])).unwrap_or(0.0).max(0.0);
+    let a = match style.align {
+        Some(crate::added::Align::Center) => 1.0,
+        Some(crate::added::Align::Right) => 2.0,
+        Some(_) => 0.0,
+        None => was,
+    };
+    // Left-aligned text keeps the room left of it; the rest of the box is where it wraps. Aligned
+    // left when asked, it goes to the box's left edge.
+    let asked_left = matches!(style.align, Some(crate::added::Align::Left | crate::added::Align::Justify));
+    let x = match () {
+        _ if a >= 0.5 => 0.0,
+        _ if asked_left && style.left_room.is_none() => 0.0,
+        _ => style.left_room.unwrap_or(room).clamp(0.0, (w - 1.0).max(0.0)),
+    };
+    style.width = Some(w - x);
+    // Its alignment in the box stays when nothing else is asked.
+    if style.align.is_none() && a >= 0.5 {
+        style.align = Some(if a >= 1.5 { crate::added::Align::Right } else { crate::added::Align::Center });
+    }
+    // Centred or right-aligned text is laid out across the whole box: from its left edge, not the
+    // text's (which is the room further right).
+    // The box's left edge just dragged counts as its room (Thai edition): centred text in a box
+    // widened to the left was laid out from the text's own left and jumped right.
+    let room_now = if a >= 0.5 { style.left_room.unwrap_or(room) } else { room };
+    if (a >= 0.5 || (asked_left && style.left_room.is_none())) && room_now > 0.0 {
+        let [dx, dy] = style.offset.unwrap_or([0.0, 0.0]);
+        style.offset = Some([dx - room_now, dy]);
+    }
+    style.frame = (w.is_finite() && w > 0.0 && h.is_finite()).then_some([w, h, a, x]);
+    style
 }
 
 struct RewriteDispatch {
@@ -539,6 +608,25 @@ fn emit_text_matrix(first: &Origin, emit: &Origin) -> Result<[f64; 6], EditError
     }
     let emit_inv = Matrix(emit.ctm).invert().ok_or_else(|| EditError::Invalid("the paragraph has a singular transform".into()))?;
     Ok(Matrix(first.tm).then(&Matrix(first.ctm)).then(&emit_inv).0)
+}
+
+/// Whether an OCR phrase (`phrase`, its size) is drawn in a face chosen for it (Thai edition: an
+/// OCR row made visible, which is then sized to the scan's width).
+fn chosen_face(phrase: Option<f64>, style: &BlockStyle) -> bool {
+    phrase.is_some() && (style.family.is_some() || style.resource.is_some())
+}
+
+/// `tm` with its x axis as long as its y axis, its direction and origin kept (Thai edition): an
+/// OCR phrase's first word is stretched across to its box (English words of the Thai layer), and
+/// letters drawn in that matrix came out squeezed or stretched with it, and a width asked for in
+/// Format text started from that stretch, not from the letters' own 100%.
+fn upright_matrix(tm: [f64; 6]) -> [f64; 6] {
+    let (across, up) = (tm[0].hypot(tm[1]), tm[2].hypot(tm[3]));
+    if !(across > 1e-9 && up.is_finite() && up > 1e-9) {
+        return tm;
+    }
+    let k = up / across;
+    [tm[0] * k, tm[1] * k, tm[2], tm[3], tm[4], tm[5]]
 }
 
 /// Line spacing in text space: the paragraph's own (scaled with the size), or 1.2 × the size.
@@ -883,8 +971,10 @@ fn paragraph_style(o: &Origin, style: &BlockStyle, phrase: Option<f64>) -> Resul
         state.scale = (sc / 100.0).clamp(0.1, 10.0);
     }
     // At the phrase's size, the first word's text matrix still carries its own width: scale it
-    // back, so the line is as wide as the scan whatever size OCR guessed for that word.
-    if phrase.is_some() && style.size.is_none() && style.scale.is_none() {
+    // back, so the line is as wide as the scan whatever size OCR guessed for that word. Not for a
+    // phrase drawn in a face chosen for it (Thai edition), whose letters keep their own proportions
+    // ([`upright_matrix`]).
+    if phrase.is_some() && style.size.is_none() && style.scale.is_none() && !chosen_face(phrase, style) {
         state.scale = (state.scale * old_size / size).clamp(0.1, 10.0);
     }
     Ok((font_name, ParaStyle { state, size, old_size, k }))
@@ -965,6 +1055,10 @@ pub(crate) fn rewrite_block_from(
     // (Thai edition).
     let underlines = super::underline::own_underlines(&ops, &members);
     dropped.extend(super::underline::indexes(&underlines));
+    // And those of the copies drawn over it, which go with it.
+    dropped.extend(coincident_underlines(&ops, &lines, &members));
+    // And the box it was given goes (Thai edition): the rewrite writes it again, as it is now.
+    dropped.extend(box_marks(&ops, &members));
     let kept_underline;
     // Thai edition: only what had an underline keeps it, a part underlined on its own included;
     // the whole paragraph is underlined again only when all of it was.
@@ -1095,6 +1189,7 @@ pub(crate) fn rewrite_block_from(
     let right_edge = if anchored_right { (b.rect[2] - b.rect[0]).max(0.0) } else { width };
     let movement = drawn_movement(emit.ctm, dx, dy)?;
     let tm = emit_text_matrix(o, emit)?;
+    let tm = if chosen_face(b.phrase_size(), style) { upright_matrix(tm) } else { tm };
     // A craft-fonts or installed family draws all of its text from its own face, Latin too
     // (Thai edition).
     let own_face = family.craft(bold, italic).is_some();
@@ -1202,6 +1297,7 @@ pub(crate) fn rewrite_block_from(
         underline: style.underline == Some(true),
     };
     let mut block_ops = block_ops(&plan, &writer, &wrapped, font.show_font.clone())?;
+    wrap_in_marks(&mut block_ops, b.group, style.frame);
     let on_top = crate::lift_on_top(over, &mut block_ops);
     block_ops.extend(after.ops().into_iter().filter(|op| !op.is("Tf") || after.font.is_some()));
     if split {
@@ -1257,7 +1353,33 @@ pub(crate) fn reveal_ops(block: &TextBlock, lines: &[TextLine], style: &BlockSty
         let back = Matrix(ctm).invert().ok_or_else(|| EditError::Invalid("the paragraph is drawn in a space it can't be covered in".into()))?;
         ops.push(Op::new("q", vec![]));
         ops.push(Op::new("rg", colour.map(n).to_vec()));
-        for rect in block.lines.iter().filter_map(|i| lines.get(*i)).map(|l| cover_box(l.rect, style.cover_between)) {
+        // The scanned word's own ink past those boxes, each piece alone (Thai edition), not past
+        // the words on either side that stay.
+        let [left, right] = style.cover_between.unwrap_or([f64::NEG_INFINITY, f64::INFINITY]);
+        let extra = style
+            .cover_extra
+            .iter()
+            .filter(|r| r.iter().all(|v| v.is_finite()))
+            .map(|r| [r[0].max(left), r[1], r[2].min(right), r[3]])
+            .filter(|r| r[2] > r[0] && r[3] > r[1]);
+        // Each row is covered from its first word to its last (Thai edition): covered word by
+        // word, the scan's ink between two words of the row (a letter its box missed) showed
+        // through. A turned paragraph's lines are covered one by one, as their boxes lie.
+        let rects = if block.rotation == 0.0 {
+            row_rects(&block.lines, &block.rows, |i| lines.get(i).map(|l| l.rect))
+        } else {
+            block.lines.iter().filter_map(|i| lines.get(*i)).map(|l| l.rect).collect()
+        };
+        let boxes = rects.into_iter().map(|r| cover_box(r, style.cover_between));
+        // Other words' ink inside the cover is left showing (Thai edition): each hole is cut out of
+        // every box, leaving only rectangles to fill.
+        let holes: Vec<[f64; 4]> =
+            style.cover_keep.iter().filter(|r| r.iter().all(|v| v.is_finite()) && r[2] > r[0] && r[3] > r[1]).copied().collect();
+        let mut shapes: Vec<[f64; 4]> = boxes.chain(extra).collect();
+        for hole in &holes {
+            shapes = shapes.into_iter().flat_map(|r| cut_out(r, *hole)).collect();
+        }
+        for rect in shapes {
             let corners = [[rect[0], rect[1]], [rect[2], rect[1]], [rect[2], rect[3]], [rect[0], rect[3]]];
             for (i, [x, y]) in corners.into_iter().enumerate() {
                 let (x, y) = back.apply(x, y);
@@ -1273,6 +1395,51 @@ pub(crate) fn reveal_ops(block: &TextBlock, lines: &[TextLine], style: &BlockSty
     }
     ops.push(Op::new("Tr", vec![Object::Int(0)]));
     Ok(ops)
+}
+
+/// The boxes of `lines` (indexes into the page's lines, `rect` giving each one's box) joined row
+/// by row (Thai edition): one box from the left of each row's first line to the right of its
+/// last. A line in no row keeps its own box.
+fn row_rects(lines: &[usize], rows: &[Vec<usize>], rect: impl Fn(usize) -> Option<[f64; 4]>) -> Vec<[f64; 4]> {
+    let join = |a: [f64; 4], b: [f64; 4]| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])];
+    let mut out: Vec<[f64; 4]> =
+        rows.iter().filter_map(|row| row.iter().filter(|i| lines.contains(i)).filter_map(|i| rect(*i)).reduce(join)).collect();
+    out.extend(lines.iter().filter(|i| !rows.iter().any(|row| row.contains(i))).filter_map(|i| rect(*i)));
+    out
+}
+
+/// What is left of `rect` with `hole` cut out of it (`[left, bottom, right, top]`), as up to four
+/// rectangles: the bands below and above the hole, and the pieces left and right of it between them.
+fn cut_out(rect: [f64; 4], hole: [f64; 4]) -> Vec<[f64; 4]> {
+    let [l, b, r, t] = rect;
+    let [hl, hb, hr, ht] = hole;
+    if hl >= r || hr <= l || hb >= t || ht <= b {
+        return vec![rect];
+    }
+    let (mb, mt) = (hb.max(b), ht.min(t));
+    [[l, b, r, mb], [l, mt, r, t], [l, mb, hl.max(l), mt], [hr.min(r), mb, r, mt]].into_iter().filter(|p| p[2] > p[0] && p[3] > p[1]).collect()
+}
+
+/// Thai edition: the paragraphs of `page` drawn by streams `owned` (added items' own streams).
+pub(crate) fn blocks_in_streams(
+    doc: &Document,
+    page: usize,
+    owned: &std::collections::BTreeSet<pdfcraft_cos::ObjRef>,
+) -> Result<Vec<usize>, EditError> {
+    let p = page_dict(doc, page)?;
+    let streams = content_streams(doc, &p.dict)?;
+    let lines = text_lines(doc, page)?;
+    Ok(group_blocks(&lines)
+        .into_iter()
+        .enumerate()
+        .filter(|(_, b)| {
+            b.lines
+                .iter()
+                .filter_map(|i| lines.get(*i))
+                .any(|l| streams.get(l.stream).and_then(|s| s.entry.as_ref()).is_some_and(|r| owned.contains(&r)))
+        })
+        .map(|(i, _)| i)
+        .collect())
 }
 
 /// Existing paragraph indexes, excluding streams owned by an added-content item.
@@ -1412,6 +1579,13 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
     // A line also lists the marked-content operators around its text (the `/Span` with the
     // ActualText PdfCraft writes around rewritten Thai, Thai edition): only its text operators move.
     selected.retain(|i| ops.get(*i).is_some_and(|o| o.is("Tj") || o.is("TJ") || o.is("'") || o.is("\"")));
+    // Nor a `TJ` of offsets alone (the shift and the shift back an earlier move set around a part,
+    // Thai edition): it draws nothing, and the glyphs between them move with the part they belong
+    // to. Counted, a second move of a two-colour paragraph was refused.
+    selected.retain(|i| {
+        ops.get(*i)
+            .is_none_or(|o| !(o.is("TJ") && o.operands.first().and_then(Object::as_array).is_some_and(|a| a.iter().all(|e| e.as_f64().is_some()))))
+    });
     if selected.is_empty() {
         return Err(EditError::Invalid("a selected paragraph has no text to move".into()));
     }
@@ -1508,7 +1682,156 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
     Ok(())
 }
 
+/// Thai edition: the rewritten paragraph's operators (`q … Q`, before any split of the text
+/// object round them) kept in the group the paragraph was in ([`group_text`]): rewritten outside
+/// it, a recoloured part left its merged group.
+/// Thai edition: the `/PCBox` wrappers ([`super::interp::TEXT_BOX_TAG`]) round the runs of
+/// `members`, their `BDC` and `EMC`, which a rewrite of them drops: left in place, the old box
+/// held the text written inside it, and a box could never be fitted to its text again.
+pub(crate) fn box_marks(ops: &[Op], members: &[&TextLine]) -> Vec<usize> {
+    let runs: std::collections::BTreeSet<usize> = members.iter().flat_map(|l| l.ops.iter().copied()).collect();
+    let mut open: Vec<(usize, bool)> = Vec::new();
+    let mut found = Vec::new();
+    for (i, op) in ops.iter().enumerate() {
+        if op.is("BDC") || op.is("BMC") {
+            open.push((i, op.is("BDC") && op.name(0) == Some(super::interp::TEXT_BOX_TAG)));
+        } else if op.is("EMC")
+            && let Some((start, boxed)) = open.pop()
+            && boxed
+            && runs.range(start..i).next().is_some()
+        {
+            found.extend([start, i]);
+        }
+    }
+    found
+}
+
+pub(crate) fn wrap_in_marks(ops: &mut Vec<Op>, group: Option<u32>, frame: Option<[f64; 4]>) {
+    if ops.is_empty() {
+        return;
+    }
+    // Its box of its own (Thai edition), inside the group's wrapper: Ungroup takes that away alone.
+    if let Some([w, h, a, x]) = frame.filter(|[w, h, _, _]| w.is_finite() && *w > 0.0 && h.is_finite() && *h >= 0.0) {
+        let mut props = Dict::new();
+        props.set(b"W".to_vec(), Object::Real((w * 1000.0).round() / 1000.0));
+        if h > 0.0 {
+            props.set(b"H".to_vec(), Object::Real((h * 1000.0).round() / 1000.0));
+        }
+        if a >= 0.5 {
+            props.set(b"A".to_vec(), Object::Int(if a >= 1.5 { 2 } else { 1 }));
+        } else if x.is_finite() && x > 0.0 {
+            props.set(b"X".to_vec(), Object::Real((x * 1000.0).round() / 1000.0));
+        }
+        let tag = std::str::from_utf8(super::interp::TEXT_BOX_TAG).unwrap_or("PCBox");
+        ops.insert(0, Op::new("BDC", vec![Object::name(tag), Object::Dict(props)]));
+        ops.push(Op::new("EMC", vec![]));
+    }
+    let Some(g) = group else { return };
+    let mut props = Dict::new();
+    props.set(b"G".to_vec(), Object::Int(i64::from(g)));
+    let tag = std::str::from_utf8(super::interp::TEXT_GROUP_TAG).unwrap_or("PCGroup");
+    ops.insert(0, Op::new("BDC", vec![Object::name(tag), Object::Dict(props)]));
+    ops.push(Op::new("EMC", vec![]));
+}
+
+/// Thai edition: Merge text boxes. Paragraphs `indexes` of `page` become one group (`group`), or
+/// leave theirs (`!group`), without a glyph moving: each of their text-showing operators is
+/// wrapped in `/PCGroup <</G n>> BDC … EMC` ([`super::interp::TEXT_GROUP_TAG`]), a number the page
+/// doesn't use yet, or the wrappers of their groups are taken away. The groups they were in are
+/// taken apart either way, so a paragraph is in one group at most. Rewriting the text into one box
+/// laid it out again: rows wrapped, lost their indent and reached over the next paragraph.
+pub(crate) fn group_text(doc: &mut Document, page: usize, indexes: &[usize], group: bool) -> Result<(), EditError> {
+    if indexes.is_empty() {
+        return Ok(());
+    }
+    let p = page_dict(doc, page)?;
+    let streams = content_streams(doc, &p.dict)?;
+    let lines = text_lines(doc, page)?;
+    let blocks = group_blocks(&lines);
+    let old: std::collections::BTreeSet<u32> = indexes.iter().filter_map(|i| blocks.get(*i)).filter_map(|b| b.group).collect();
+    let mut selected = paragraph_ops(doc, page, indexes, true)?;
+    let pieces = joined(&streams);
+    let ops = pieces.parse().ops;
+    // Their text operators: offset-only `TJ`s an earlier move set round a part are shown text too,
+    // and stay in the group with the glyphs they move (a line of two groups would come apart).
+    selected.retain(|i| ops.get(*i).is_some_and(|o| o.is("Tj") || o.is("TJ") || o.is("'") || o.is("\"")));
+    if group && selected.is_empty() {
+        return Err(EditError::Invalid("the selected paragraphs have no text to merge".into()));
+    }
+    let tagged = |op: &Op| -> Option<u32> {
+        (op.is("BDC") && op.name(0) == Some(super::interp::TEXT_GROUP_TAG))
+            .then(|| op.operands.get(1).and_then(Object::as_dict).and_then(|d| d.get(b"G")).and_then(Object::as_int))
+            .flatten()
+            .and_then(|g| u32::try_from(g).ok())
+    };
+    let mut patches: HashMap<usize, Vec<Op>> = HashMap::new();
+    // The wrappers of the groups taken apart, paired by nesting.
+    let mut open: Vec<(usize, Option<u32>)> = Vec::new();
+    for (i, op) in ops.iter().enumerate() {
+        if op.is("BDC") || op.is("BMC") {
+            open.push((i, tagged(op)));
+        } else if op.is("EMC")
+            && let Some((start, g)) = open.pop()
+            && g.is_some_and(|g| old.contains(&g))
+        {
+            patches.insert(start, Vec::new());
+            patches.insert(i, Vec::new());
+        }
+    }
+    if group {
+        let next = ops.iter().filter_map(tagged).max().map_or(1, |g| g.saturating_add(1));
+        let mut props = Dict::new();
+        props.set(b"G".to_vec(), Object::Int(i64::from(next)));
+        for i in selected {
+            let Some(op) = ops.get(i) else { continue };
+            let begin = Op::new(
+                "BDC",
+                vec![Object::name(std::str::from_utf8(super::interp::TEXT_GROUP_TAG).unwrap_or("PCGroup")), Object::Dict(props.clone())],
+            );
+            patches.insert(i, vec![begin, op.clone(), Op::new("EMC", vec![])]);
+        }
+    }
+    if patches.is_empty() {
+        return Ok(());
+    }
+    let data = splice(&pieces, &ops, |i| patches.remove(&i).map_or((Vec::new(), true), |v| (v, false)));
+    let contents = rewritten_contents(doc, &streams, data)?;
+    doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
+    Ok(())
+}
+
 /// The char boundary of `text` at or before byte `at` (Thai edition).
 fn floor_boundary(text: &str, at: usize) -> Option<usize> {
     (0..=at.min(text.len())).rev().find(|&k| text.is_char_boundary(k))
+}
+
+#[cfg(test)]
+mod cut_out_tests {
+    use super::{cut_out, row_rects};
+
+    /// Thai edition: a row's word boxes are joined into one cover, gap and all; another row, and
+    /// a line in no row, keep their own; lines of other paragraphs are left out.
+    #[test]
+    fn a_rows_word_boxes_are_covered_as_one() {
+        let boxes = [[100.0, 10.0, 130.0, 20.0], [140.0, 9.0, 170.0, 21.0], [100.0, 30.0, 150.0, 40.0], [10.0, 50.0, 20.0, 60.0], [0.0; 4]];
+        let rect = |i: usize| boxes.get(i).copied();
+        let rows = vec![vec![0, 1, 4], vec![2]];
+        assert_eq!(row_rects(&[0, 1, 2, 3], &rows, rect), vec![[100.0, 9.0, 170.0, 21.0], [100.0, 30.0, 150.0, 40.0], [10.0, 50.0, 20.0, 60.0]]);
+    }
+
+    /// A hole inside a box leaves four bands around it; one off the box leaves the box whole; one
+    /// over the box's edge leaves the rest; one over all of it leaves nothing (Thai edition).
+    #[test]
+    fn a_hole_is_cut_out_of_a_cover_box() {
+        let area = |rs: &[[f64; 4]]| rs.iter().map(|r| (r[2] - r[0]) * (r[3] - r[1])).sum::<f64>();
+        let rect = [0.0, 0.0, 10.0, 10.0];
+        let inside = cut_out(rect, [2.0, 3.0, 4.0, 6.0]);
+        assert_eq!(inside.len(), 4);
+        assert!((area(&inside) - 94.0).abs() < 1e-9);
+        assert!(inside.iter().all(|r| r[2] <= 2.0 || r[0] >= 4.0 || r[3] <= 3.0 || r[1] >= 6.0), "no piece overlaps the hole: {inside:?}");
+        assert_eq!(cut_out(rect, [20.0, 0.0, 30.0, 10.0]), vec![rect]);
+        let edge = cut_out(rect, [8.0, -5.0, 15.0, 5.0]);
+        assert!((area(&edge) - 90.0).abs() < 1e-9, "{edge:?}");
+        assert!(cut_out(rect, [-1.0, -1.0, 11.0, 11.0]).is_empty());
+    }
 }

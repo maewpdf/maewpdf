@@ -7678,6 +7678,49 @@ fn large_non_interpolated_images_are_smoothed_when_enlarged() {
     assert_eq!((page.rgba[(row + 700) * 4], page.rgba[(row + 836) * 4]), (0, 255), "away from the edge");
 }
 
+/// A straightened scan shown below 100% (Thai edition): an image of page-scan size shrunk to a
+/// third and turned 1.5°. It can't be snapped to whole pixels, so the shrunk raster is sampled
+/// a second time at the turn; nearest-neighbour made its edges staircases (a scan's rules came
+/// out broken and its text wobbled). Sampled bilinearly, an edge's ink moves smoothly from
+/// column to column.
+#[test]
+fn a_turned_scan_shrunk_below_its_resolution_has_smooth_edges() {
+    let side = 512usize;
+    // Top half black, bottom half white: one long edge across.
+    let half: Vec<u8> = (0..side * side).map(|i| if i / side < side / 2 { 0 } else { 255 }).collect();
+    let (w, h) = (200u32, 200u32);
+    let (s, turn) = (171.0f64, 1.5f64.to_radians());
+    let (c, n) = (s * turn.cos(), s * turn.sin());
+    let content = format!("q {c:.4} {n:.4} {:.4} {c:.4} 15 15 cm /Im0 Do Q", -n);
+    let image = hex(&half);
+    let pdf = format!(
+        "%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj
+         4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+         5 0 obj << /Type /XObject /Subtype /Image /Width {side} /Height {side} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length {} >> stream
+{image}>
+endstream endobj
+         trailer << /Root 1 0 R >>
+%%EOF
+",
+        content.len(),
+        image.len() + 1
+    );
+    let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    // The ink of each column within a band around the edge, in pixels of black.
+    let ink = |x: usize| (70..130).map(|y| f64::from(255 - page.rgba[(y * w as usize + x) * 4]) / 255.0).sum::<f64>();
+    let inks: Vec<f64> = (40..160).map(ink).collect();
+    let jump = inks.windows(2).map(|p| (p[1] - p[0]).abs()).fold(0.0, f64::max);
+    assert!((inks.last().unwrap() - inks.first().unwrap()).abs() > 2.0, "the edge moves across the band: {inks:?}");
+    assert!(jump < 0.5, "the edge steps by {jump} px from one column to the next: {inks:?}");
+}
+
 /// Small images (icons, QR codes, pixel art) keep their hard pixels when enlarged.
 #[test]
 fn small_non_interpolated_images_keep_hard_pixels_when_enlarged() {

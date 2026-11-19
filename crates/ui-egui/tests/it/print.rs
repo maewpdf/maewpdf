@@ -297,7 +297,10 @@ fn printing_landscape_sheets_tells_cups_to_turn_them() {
         choose(&mut h.state_mut().print_draft);
         h.run_steps(1);
         h.get_by(|n| n.label().as_deref() == Some("Print") && n.role() == Role::Button).click();
-        for _ in 0..400 {
+        // Up to 10 s, as the dialog's printers are waited for: with every test running at once the
+        // job took longer than 2 s to reach the spooler, and the last job sent before was read instead.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
             h.run_steps(1);
             if jobs.lock().unwrap().len() > before {
                 break;
@@ -1710,7 +1713,10 @@ fn a_custom_paper_prints_at_its_size_and_its_printer_keeps_it() {
     }
     h.run_steps(8);
     h.get_by(|n| n.label().as_deref() == Some("Print") && n.role() == Role::Button).click();
-    for _ in 0..400 {
+    // Up to 10 s, as the dialog's printers are waited for: with every test running at once the
+    // job took longer than 2 s to reach the spooler, and the last job sent before was read instead.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
         h.run_steps(1);
         if !sent.lock().unwrap().is_empty() {
             break;
@@ -2021,7 +2027,10 @@ fn each_printer_keeps_what_it_last_printed_with_across_a_restart() {
         }
         h.run_steps(2);
         h.get_by(|n| n.label().as_deref() == Some("Print") && n.role() == Role::Button).click();
-        for _ in 0..400 {
+        // Up to 10 s, as the dialog's printers are waited for: with every test running at once the
+        // job took longer than 2 s to reach the spooler, and the last job sent before was read instead.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
             h.run_steps(1);
             if jobs.lock().unwrap().len() > before {
                 break;

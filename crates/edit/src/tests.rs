@@ -6289,6 +6289,172 @@ fn editing_text_keeps_an_overlapping_watermark_and_covered_paragraphs() {
     assert_eq!(listed(&reopen(&ocr)), ["Goodbye world"]);
 }
 
+/// Thai edition: a paragraph's box dragged wider or taller than its text keeps that size: a
+/// one-line title stays in a wide box (it snapped back to its text, so the box seemed not to
+/// stretch), a tall box keeps its height, its text keeps its size, and the box survives an edit
+/// of its text, a move, a save, and typing more, which wraps at the box's width.
+#[test]
+fn a_paragraph_keeps_the_box_it_was_dragged_to() {
+    let close = |a: f64, b: f64| (a - b).abs() < 0.5;
+    let mut doc = text_page("BT /F1 10 Tf 100 700 Td (Hardware) Tj ET");
+    let before = text::text_blocks(&doc, 0).unwrap()[0].clone();
+    assert_eq!(before.frame, None, "a page's own text has its text's box");
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(200.0), height: Some(40.0), ..Default::default() }).unwrap();
+    let doc = reopen(&doc);
+    let b = text::text_blocks(&doc, 0).unwrap()[0].clone();
+    let frame = b.frame.expect("a box of its own");
+    assert!(
+        close(frame[0], before.rect[0]) && close(frame[2] - frame[0], 200.0) && close(frame[3], before.rect[3]) && close(frame[3] - frame[1], 40.0),
+        "{frame:?}"
+    );
+    assert!(close(b.rect[2] - b.rect[0], before.rect[2] - before.rect[0]) && close(b.size, 10.0), "the text as it was: {:?}", b.rect);
+    // Its text edited: the box stays.
+    let mut doc = doc;
+    text::rewrite_block(&mut doc, 0, 0, Some("Hardware list"), &text::BlockStyle::default()).unwrap();
+    let b = text::text_blocks(&reopen(&doc), 0).unwrap()[0].clone();
+    assert!(b.frame.is_some_and(|f| close(f[2] - f[0], 200.0) && close(f[3] - f[1], 40.0)), "{:?}", b.frame);
+    // Moved: the box comes along.
+    let doc = reopen(&doc);
+    let mut doc = doc;
+    crate::move_objects(&mut doc, 0, &[crate::ObjectTarget { kind: crate::ObjectKind::Text, index: 0 }], [30.0, -50.0]).unwrap();
+    let moved = text::text_blocks(&reopen(&doc), 0).unwrap()[0].clone();
+    let f = moved.frame.expect("moved with it");
+    assert!(close(f[0], frame[0] + 30.0) && close(f[3], frame[3] - 50.0) && close(f[2] - f[0], 200.0), "{f:?}");
+    // Typing past its width wraps at the box.
+    let mut doc = reopen(&doc);
+    let long = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen";
+    text::rewrite_block(&mut doc, 0, 0, Some(long), &text::BlockStyle::default()).unwrap();
+    let b = text::text_blocks(&reopen(&doc), 0).unwrap()[0].clone();
+    assert!(b.rows.len() > 1 && b.rect[2] <= f[0] + 200.5, "wrapped at the box: {:?} {:?}", b.rect, b.rows.len());
+}
+
+/// Thai edition: a one-line paragraph in a box dragged wider, centred: the text goes to the middle
+/// of its box and the box stays as it was. The box shrank back to the text, left where it was.
+#[test]
+fn a_paragraph_centred_in_its_box_keeps_the_box() {
+    let close = |a: f64, b: f64| (a - b).abs() < 1.0;
+    let mut doc = text_page("BT /F1 10 Tf 100 700 Td (Hardware) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(300.0), ..Default::default() }).unwrap();
+    let boxed = text::text_blocks(&reopen(&doc), 0).unwrap()[0].clone();
+    let frame = boxed.frame.expect("its box");
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { align: Some(crate::added::Align::Center), ..Default::default() }).unwrap();
+    let b = text::text_blocks(&reopen(&doc), 0).unwrap()[0].clone();
+    let f = b.frame.expect("still its box");
+    assert!(close(f[0], frame[0]) && close(f[2], frame[2]), "the box as it was: {frame:?} -> {f:?}");
+    let mid = (b.rect[0] + b.rect[2]) / 2.0;
+    assert!(close(mid, (frame[0] + frame[2]) / 2.0), "in the middle of its box: {:?} in {f:?}", b.rect);
+}
+
+/// Thai edition: pieces of a row merged are one paragraph, each where it was: two touching
+/// ("Ord" "ered", each a text object of its own under a tag of its own) read as one word, two a
+/// word apart keep a space between them.
+#[test]
+fn merged_pieces_of_a_row_are_one_paragraph() {
+    let content = "/P <</MCID 0>> BDC BT /F1 10 Tf 100 700 Td (Ord) Tj ET EMC /P <</MCID 1>> BDC BT /F1 10 Tf 116.67 700 Td (ered) Tj ET EMC                    /P <</MCID 2>> BDC BT /F1 10 Tf 100 650 Td (Laser) Tj ET EMC /P <</MCID 3>> BDC BT /F1 10 Tf 130 650 Td (Printer) Tj ET EMC";
+    let mut doc = text_page(content);
+    let texts = |doc: &Document| text::text_blocks(doc, 0).unwrap().into_iter().map(|b| b.text).collect::<Vec<_>>();
+    let before = texts(&doc);
+    assert_eq!(before.len(), 4, "four boxes: {before:?}");
+    let lines_before: Vec<_> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| (l.text, l.rect)).collect();
+    crate::group_paragraphs(&mut doc, 0, &[0, 1], &[], true).unwrap();
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    crate::group_paragraphs(
+        &mut doc,
+        0,
+        &[blocks.iter().position(|b| b.text == "Laser").unwrap(), blocks.iter().position(|b| b.text == "Printer").unwrap()],
+        &[],
+        true,
+    )
+    .unwrap();
+    let doc = reopen(&doc);
+    let mut after = texts(&doc);
+    after.sort();
+    assert_eq!(after, ["Laser Printer", "Ordered"]);
+    let lines_after: Vec<_> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| (l.text, l.rect)).collect();
+    assert_eq!(lines_after, lines_before, "every piece where it was");
+}
+
+/// Thai edition: a box's left edge dragged out past its text grows the box to the left and
+/// leaves the text where it is; aligned right afterwards, the text goes to the box's right edge
+/// and the box stays. The text went to the new left edge with it.
+#[test]
+fn a_box_widened_to_the_left_keeps_its_text_in_place() {
+    let close = |a: f64, b: f64| (a - b).abs() < 1.0;
+    let mut doc = text_page("BT /F1 10 Tf 200 700 Td (Hardware) Tj ET");
+    let before = text::text_blocks(&doc, 0).unwrap()[0].clone();
+    let w = before.rect[2] - before.rect[0];
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(w + 100.0), left_room: Some(100.0), ..Default::default() }).unwrap();
+    let b = text::text_blocks(&reopen(&doc), 0).unwrap()[0].clone();
+    let f = b.frame.expect("its box");
+    assert!(close(b.rect[0], before.rect[0]), "the text where it was: {:?} -> {:?}", before.rect, b.rect);
+    assert!(close(f[0], before.rect[0] - 100.0) && close(f[2], before.rect[2]), "the box grew left: {f:?}");
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { align: Some(crate::added::Align::Right), ..Default::default() }).unwrap();
+    let r = text::text_blocks(&reopen(&doc), 0).unwrap()[0].clone();
+    let g = r.frame.expect("still its box");
+    assert!(close(g[0], f[0]) && close(g[2], f[2]), "the box as it was: {f:?} -> {g:?}");
+    assert!(close(r.rect[2], f[2]), "at its right edge: {:?} in {g:?}", r.rect);
+    // Edited again (a colour), it stays there, in its box.
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { color: Some([1.0, 0.0, 0.0]), ..Default::default() }).unwrap();
+    let c = text::text_blocks(&reopen(&doc), 0).unwrap()[0].clone();
+    assert!(close(c.rect[2], f[2]) && c.frame.is_some_and(|h| close(h[0], f[0]) && close(h[2], f[2])), "{:?} {:?}", c.rect, c.frame);
+    // Aligned left: to the box's left edge, the box as it was.
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { align: Some(crate::added::Align::Left), ..Default::default() }).unwrap();
+    let l = text::text_blocks(&reopen(&doc), 0).unwrap()[0].clone();
+    assert!(close(l.rect[0], f[0]) && l.frame.is_some_and(|h| close(h[0], f[0]) && close(h[2], f[2])), "{:?} {:?}", l.rect, l.frame);
+    // Centred, then its left edge dragged further out: the box grows left, the text stays in its
+    // middle.
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { align: Some(crate::added::Align::Center), ..Default::default() }).unwrap();
+    let m = text::text_blocks(&reopen(&doc), 0).unwrap()[0].clone();
+    let mf = m.frame.expect("its box");
+    let room = m.rect[0] - mf[0] + 40.0;
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(mf[2] - mf[0] + 40.0), left_room: Some(room), ..Default::default() })
+        .unwrap();
+    let n = text::text_blocks(&reopen(&doc), 0).unwrap()[0].clone();
+    let nf = n.frame.expect("its box");
+    assert!(close(nf[0], mf[0] - 40.0) && close(nf[2], mf[2]), "grew left: {mf:?} -> {nf:?}");
+    assert!(close((n.rect[0] + n.rect[2]) / 2.0, (nf[0] + nf[2]) / 2.0), "in its middle: {:?} in {nf:?}", n.rect);
+}
+
+/// Owner's report (Thai edition): a heading of several colours, centred on the page, kept its
+/// text in place when its box was widened to the left, but widened to the right the text (and
+/// the box with it) moved right by half as much: the rewrite of a paragraph of several looks took
+/// it as centred and centred it in its new width. Plain text, and any paragraph given a box, is
+/// aligned as asked instead.
+#[test]
+fn a_centred_heading_of_two_colours_widened_left_then_right_keeps_its_text_in_place() {
+    let close = |a: f64, b: f64| (a - b).abs() < 1.0;
+    let words = "Hardware Request";
+    let w = text::text_blocks(&text_page(&format!("BT /F1 10 Tf 0 700 Td ({words}) Tj ET")), 0).unwrap()[0].clone();
+    let w = w.rect[2] - w.rect[0];
+    // Centred on the 600-wide page.
+    let mut doc = text_page(&format!("BT /F1 10 Tf {} 700 Td ({words}) Tj ET", 300.0 - w / 2.0));
+    let red = text::RangeStyle {
+        range: 0..8,
+        family: None,
+        resource: None,
+        size: None,
+        color: Some([0.9, 0.1, 0.1]),
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { ranges: vec![red], ..Default::default() }).unwrap();
+    let mut doc = reopen(&doc);
+    let before = text::text_blocks(&doc, 0).unwrap()[0].clone();
+    let w = before.rect[2] - before.rect[0];
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(w + 100.0), left_room: Some(100.0), ..Default::default() }).unwrap();
+    let mut doc = reopen(&doc);
+    let b = text::text_blocks(&doc, 0).unwrap()[0].clone();
+    let f = b.frame.expect("its box");
+    assert!(close(b.rect[0], before.rect[0]), "widened left, the text where it was: {:?} -> {:?}", before.rect, b.rect);
+    // The right edge dragged out 80: only the width changes, as the app asks.
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(f[2] - f[0] + 80.0), ..Default::default() }).unwrap();
+    let r = text::text_blocks(&reopen(&doc), 0).unwrap()[0].clone();
+    let g = r.frame.expect("still its box");
+    assert!(close(r.rect[0], before.rect[0]), "the text where it was: {:?} -> {:?} in {g:?}", before.rect, r.rect);
+    assert!(close(g[0], f[0]) && close(g[2], f[2] + 80.0), "the box grew right: {f:?} -> {g:?}");
+}
+
 #[test]
 fn paragraphs_move_and_rewrap_to_a_new_width() {
     let para = "BT /F1 10 Tf 12 TL 100 700 Td (One two three four five six seven) Tj T* (eight nine ten eleven twelve) Tj ET";
@@ -8050,7 +8216,7 @@ fn group_moves_handle_added_content_under_inherited_graphics_state() {
 fn group_selection_refuses_incomplete_content_and_resource_budget_overruns() {
     for data in [
         format!("{} BT /F1 12 Tf 40 400 Td (Target) Tj ET", "q ".repeat(1025)),
-        format!("{} BT /F1 12 Tf 40 400 Td (Target) Tj ET", "n ".repeat(100001)),
+        format!("{} BT /F1 12 Tf 40 400 Td (Target) Tj ET", "n ".repeat(crate::objects::MAX_GROUP_OPERATIONS + 1)),
     ] {
         let mut doc = text_page(&data);
         let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
@@ -8191,8 +8357,9 @@ fn an_ocr_rewrite_refused_on_top_leaves_the_document_as_it_was() {
 
 #[test]
 fn group_move_budget_refusals_keep_the_original_page_selectable() {
-    let text = text_page(&format!("{} BT /F1 12 Tf 40 400 Td (Target) Tj ET", "n ".repeat(99_995)));
-    assert_eq!(pdfcraft_content::parse(&page_content_bytes(&text, 0)).ops.len(), 100_000);
+    let max = crate::objects::MAX_GROUP_OPERATIONS;
+    let text = text_page(&format!("{} BT /F1 12 Tf 40 400 Td (Target) Tj ET", "n ".repeat(max - 5)));
+    assert_eq!(pdfcraft_content::parse(&page_content_bytes(&text, 0)).ops.len(), max);
     let mut image = image_page();
     let page = pdfcraft_model::pages(&image)[0].obj;
     let bytes = format!("{} /Im0 Do {}", "q ".repeat(1024), "Q ".repeat(1024));
@@ -13717,6 +13884,39 @@ fn ungroup_art(content: &[u8], group: bool, build: impl FnOnce(&mut Document) ->
     doc.set(pdfcraft_cos::ObjRef::new(7, 0), Object::Stream(Stream::flate(Dict::new(), b"q /Art Do Q")));
     let mut doc = reopen(&doc);
     images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup).map(|_| ())
+}
+
+/// A Type 3 font without `/Resources` whose glyphs are outlines only (as the Thai edition's own
+/// fallback fonts are) names nothing, so its text ungroups (and pastes onto another page) though
+/// the form's names are renamed; one whose glyph draws with a font of the form's is still refused.
+/// Before, every Type 3 font without resources was refused, so a moved Thai box couldn't land on
+/// a page whose fonts shared a name with its own.
+#[test]
+fn ungroup_takes_a_type3_font_of_outlines_only() {
+    let run = |glyph: &'static [u8]| {
+        ungroup_art(b"BT /F1 9 Tf (a) Tj /N 9 Tf <01> Tj ET", false, |doc| {
+            let mut times = Dict::new();
+            times.set(b"Type".to_vec(), Object::name("Font"));
+            times.set(b"Subtype".to_vec(), Object::name("Type1"));
+            times.set(b"BaseFont".to_vec(), Object::name("Times-Roman"));
+            let mut procs = Dict::new();
+            procs.set(b"g01".to_vec(), Object::Ref(doc.add(Object::Stream(Stream::flate(Dict::new(), glyph)))));
+            let mut t3 = Dict::new();
+            t3.set(b"Type".to_vec(), Object::name("Font"));
+            t3.set(b"Subtype".to_vec(), Object::name("Type3"));
+            t3.set(b"CharProcs".to_vec(), Object::Dict(procs));
+            let mut fonts = Dict::new();
+            fonts.set(b"F1".to_vec(), Object::Dict(times));
+            fonts.set(b"N".to_vec(), Object::Dict(t3));
+            let mut res = Dict::new();
+            res.set(b"Font".to_vec(), Object::Dict(fonts));
+            res
+        })
+    };
+    let outline = run(b"500 0 0 0 400 700 d1 0 0 m 400 0 l 400 700 l h f");
+    assert!(outline.is_ok(), "{outline:?}");
+    let r = run(b"500 0 d0 BT /F1 9 Tf (n) Tj ET");
+    assert!(matches!(&r, Err(EditError::Invalid(m)) if m.contains("uses its resources")), "{r:?}");
 }
 
 /// A nested form, Type 3 font or tiling pattern without `/Resources` takes its names from the

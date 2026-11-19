@@ -2218,6 +2218,18 @@ evidence = ["crates/edit/src/tests.rs::a_text_box_splits_into_lines_and_at_space
 notes = "Thai edition. In Edit text & images, right-click one text box or paragraph: Split into lines makes a box per line, Split at spaces a box per word of each line (a form's labels such as เชื้อชาติ...... สัญชาติ...... apart), each where it was drawn, in the same look; one undo step. Headless: content_split, for added text boxes only; a paragraph of the page splits only in the app. Per-character colours and sizes of a paragraph are not carried into the pieces (each takes the paragraph's look). Turned, stacked and right-to-left text doesn't split. Acrobat's behaviour not observed."
 
 [[feature]]
+id = "edit.merge-text-boxes"
+title = "Merge text boxes into a group (Thai edition)"
+area = "C"
+tier = "P2"
+milestone = "M7"
+status = "shipped"
+commands = ["edit.edit_text"]
+tools = ["object_group", "object_list"]
+evidence = ["crates/engine/src/tests.rs::merged_paragraphs_keep_their_place_and_stay_together", "crates/ui-egui/tests/it/object_selection.rs::selected_text_boxes_merge_into_one_in_place", "crates/ui-egui/tests/it/object_selection.rs::a_merged_group_is_selected_and_ungrouped_whole", "crates/ui-egui/tests/it/object_selection.rs::a_colour_picked_for_merged_ocr_rows_draws_each_in_place", "crates/automation/tests/it/automation.rs::text_objects_group_in_place_and_ungroup"]
+notes = "Thai edition. In Edit text & images, select two or more paragraphs or added text boxes and right-click ▸ Merge text boxes: they become one group, each keeping its text, look and place (added boxes become text of the page where they are); a click on one selects the whole group, the format panel changes them all, a double click types into one; Ungroup text boxes takes them apart. One undo step each; the group is kept in the PDF as marked content (PCGroup) and survives a save. Headless: object_group (ungroup: true). Acrobat's behaviour not observed."
+
+[[feature]]
 id = "edit.image-external-editor"
 title = "Edit an image in an external application"
 area = "C"

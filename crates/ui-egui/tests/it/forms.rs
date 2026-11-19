@@ -672,6 +672,8 @@ fn an_undelimited_date_field_takes_a_typed_date_and_its_calendar_opens_on_it() {
 /// is one edit as a clicked day is.
 #[test]
 fn the_calendar_picks_today_in_the_fields_format_from_any_month() {
+    // It draws with the GPU, which only one test may use at a time: two at once crashed the run.
+    let _gpu = crate::gpu();
     use egui_kittest::kittest::Queryable;
     let mut h = harness();
     // 2023-11-14 on the injected clock.

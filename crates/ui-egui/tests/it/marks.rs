@@ -67,6 +67,8 @@ fn header_and_footer_dialog_inserts_tokens_and_applies_to_a_subset() {
 /// document has one, and the dialog takes a font.
 #[test]
 fn the_edit_panel_removes_a_header_and_the_dialog_chooses_its_font() {
+    // It draws with the GPU, which only one test may use at a time: two at once crashed the run.
+    let _gpu = crate::gpu();
     let mut h = harness();
     assert!(h.state_mut().execute("edit.text"));
     h.run_steps(3);
@@ -104,6 +106,8 @@ fn the_edit_panel_removes_a_header_and_the_dialog_chooses_its_font() {
 /// Thai edition: the Watermark dialog takes a font, as Header and Footer does.
 #[test]
 fn the_watermark_dialog_chooses_its_font() {
+    // It draws with the GPU, which only one test may use at a time: two at once crashed the run.
+    let _gpu = crate::gpu();
     let mut h = harness();
     assert!(h.state_mut().execute("edit.watermark"));
     h.run_steps(3);

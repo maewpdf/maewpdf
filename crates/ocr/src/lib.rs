@@ -248,6 +248,81 @@ impl PlacedWord {
             source: word.source.clone(),
         }
     }
+
+    /// The word turned level about its centre when it leans from a quarter turn by at most
+    /// `max_degrees` (Thai edition): a scan straightened for reading leans its words by the angle
+    /// found, a degree or less on most pages, and text placed at such a lean is turned text, which
+    /// Edit text can't restyle (a colour or a document font for it is refused). Its length, height
+    /// and centre stay; a word on a quarter-turned page stays turned, and one leaning further stays
+    /// as it is.
+    #[must_use]
+    pub fn leveled(self, max_degrees: f64) -> PlacedWord {
+        let [ax, ay] = self.across;
+        let [ux, uy] = self.up;
+        let (along, high) = (ax.hypot(ay), ux.hypot(uy));
+        if !(along.is_finite() && high.is_finite()) || along <= 0.0 || high <= 0.0 {
+            return self;
+        }
+        let quarter = std::f64::consts::FRAC_PI_2;
+        let angle = ay.atan2(ax);
+        let turns = (angle / quarter).round();
+        let lean = angle - turns * quarter;
+        if lean == 0.0 || lean.abs() > max_degrees.to_radians() {
+            return self;
+        }
+        // Exact directions for the quarter turn, so the line reads as upright (or turned) exactly.
+        let (c, s) = match (turns as i64).rem_euclid(4) {
+            0 => (1.0, 0.0),
+            1 => (0.0, 1.0),
+            2 => (-1.0, 0.0),
+            _ => (0.0, -1.0),
+        };
+        // `up` keeps its side of `across` (a mirrored word stays mirrored).
+        let side = if ax * uy - ay * ux < 0.0 { -1.0 } else { 1.0 };
+        let centre = [self.origin[0] + (ax + ux) / 2.0, self.origin[1] + (ay + uy) / 2.0];
+        let across = [along * c, along * s];
+        let up = [-side * high * s, side * high * c];
+        PlacedWord { origin: [centre[0] - (across[0] + up[0]) / 2.0, centre[1] - (across[1] + up[1]) / 2.0], across, up, ..self }
+    }
+
+    /// How far the word leans from the nearest quarter turn, in degrees, anticlockwise positive
+    /// (user space, y up). `None` for a word of no size.
+    pub fn lean_degrees(&self) -> Option<f64> {
+        let [ax, ay] = self.across;
+        if !(ax.is_finite() && ay.is_finite()) || ax.hypot(ay) <= 0.0 {
+            return None;
+        }
+        let quarter = std::f64::consts::FRAC_PI_2;
+        let angle = ay.atan2(ax);
+        Some((angle - (angle / quarter).round() * quarter).to_degrees())
+    }
+
+    /// The word with its centre carried by the PDF matrix `m` (`[a b c d e f]`), its box kept as
+    /// it is (Thai edition): a level word moved with the scan that was turned level under it.
+    #[must_use]
+    pub fn centre_moved(self, m: [f64; 6]) -> PlacedWord {
+        let [ax, ay] = self.across;
+        let [ux, uy] = self.up;
+        let (x, y) = (self.origin[0] + (ax + ux) / 2.0, self.origin[1] + (ay + uy) / 2.0);
+        let (nx, ny) = (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]);
+        if !(nx.is_finite() && ny.is_finite()) {
+            return self;
+        }
+        PlacedWord { origin: [self.origin[0] + nx - x, self.origin[1] + ny - y], ..self }
+    }
+}
+
+/// The lean shared by `words` (the median of theirs, in degrees, anticlockwise positive), when
+/// it is between `min` and `max` degrees either way (Thai edition): the words of a scan
+/// straightened for reading all lean by the angle found.
+pub fn common_lean(words: &[PlacedWord], min: f64, max: f64) -> Option<f64> {
+    let mut leans: Vec<f64> = words.iter().filter_map(PlacedWord::lean_degrees).filter(|l| l.abs() <= max).collect();
+    if leans.is_empty() {
+        return None;
+    }
+    leans.sort_by(f64::total_cmp);
+    let median = *leans.get(leans.len() / 2)?;
+    (median.abs() >= min).then_some(median)
 }
 
 /// Helvetica's ascender and descender (em fractions): a word box spans about this much.
@@ -524,6 +599,63 @@ pub fn lines_from_json(json: &str, source: &str) -> Result<Vec<Line>, OcrError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A word leaning 1.5° (a straightened scan) is placed level about its centre, its length and
+    /// height kept; one on a quarter-turned page leaning as much stays turned, now exactly; one
+    /// leaning 20° stays as it is.
+    #[test]
+    fn a_word_leaning_a_little_is_placed_level() {
+        let word = |degrees: f64| {
+            let (s, c) = degrees.to_radians().sin_cos();
+            PlacedWord {
+                text: "คำ".into(),
+                origin: [100.0, 200.0],
+                across: [80.0 * c, 80.0 * s],
+                up: [-12.0 * s, 12.0 * c],
+                confidence: None,
+                source: "paddle".into(),
+            }
+        };
+        let centre = |w: &PlacedWord| [w.origin[0] + (w.across[0] + w.up[0]) / 2.0, w.origin[1] + (w.across[1] + w.up[1]) / 2.0];
+        let close = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9;
+        let leaning = word(1.5);
+        let level = leaning.clone().leveled(3.0);
+        assert_eq!(level.across[1], 0.0, "level: {:?}", level.across);
+        assert_eq!(level.up[0], 0.0);
+        assert!(close(level.across, [80.0, 0.0]) && close(level.up, [0.0, 12.0]));
+        assert!(close(centre(&level), centre(&leaning)), "the centre stays");
+        let turned = word(90.0 - 1.5).leveled(3.0);
+        assert!(close(turned.across, [0.0, 80.0]) && close(turned.up, [-12.0, 0.0]), "{turned:?}");
+        assert_eq!(word(20.0).leveled(3.0), word(20.0));
+        assert_eq!(word(0.0).leveled(3.0), word(0.0));
+    }
+
+    /// Words leaning together give their lean; a few outliers and words of no size don't change
+    /// it; a lean too small or too large is none. A word's centre moves with a matrix, its box kept.
+    #[test]
+    fn words_leaning_together_give_their_lean() {
+        let word = |degrees: f64, x: f64| {
+            let (s, c) = degrees.to_radians().sin_cos();
+            PlacedWord {
+                text: "w".into(),
+                origin: [x, 100.0],
+                across: [40.0 * c, 40.0 * s],
+                up: [-10.0 * s, 10.0 * c],
+                confidence: None,
+                source: "t".into(),
+            }
+        };
+        let mut words: Vec<PlacedWord> = (0..5).map(|k| word(-1.2, f64::from(k) * 50.0)).collect();
+        words.push(word(30.0, 0.0));
+        words.push(PlacedWord { across: [0.0, 0.0], ..word(0.0, 0.0) });
+        let lean = common_lean(&words, 0.05, 5.5).unwrap();
+        assert!((lean + 1.2).abs() < 1e-9, "{lean}");
+        assert_eq!(common_lean(&[word(0.01, 0.0)], 0.05, 5.5), None, "straight enough");
+        assert_eq!(common_lean(&[word(12.0, 0.0)], 0.05, 5.5), None, "past the range");
+        assert_eq!(common_lean(&[], 0.05, 5.5), None);
+        let moved = word(0.0, 10.0).centre_moved([1.0, 0.0, 0.0, 1.0, 5.0, -3.0]);
+        assert_eq!((moved.origin, moved.across, moved.up), ([15.0, 97.0], [40.0, 0.0], [0.0, 10.0]));
+    }
 
     #[test]
     fn places_words_through_the_mapping() {

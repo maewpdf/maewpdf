@@ -49,7 +49,8 @@ impl TextSession {
 
     /// Lays a draft out without writing it: the rewrite Apply runs, on a copy of the opened document.
     pub fn layout(&self, text: &str, style: &BlockStyle) -> Result<TextEditLayout, EditError> {
-        layout_draft(&self.base, self.page, &self.lines, &self.source, self.block, text, style)
+        let style = crate::text::boxed_style(&self.source, &self.lines, style);
+        layout_draft(&self.base, self.page, &self.lines, &self.source, self.block, text, &style)
     }
 
     /// Writes the draft into `doc`, which must still be the document the session was opened on.
@@ -67,6 +68,8 @@ impl TextSession {
         if !self.is_current(doc) {
             return Err(EditError::Invalid("the paragraph changed while it was being edited".into()));
         }
-        rewrite_block_from(doc, self.page, self.lines.clone(), self.block, text, style, max_glyphs)
+        // Thai edition: the box the paragraph keeps, and the width its text wraps at.
+        let style = crate::text::boxed_style(&self.source, &self.lines, style);
+        rewrite_block_from(doc, self.page, self.lines.clone(), self.block, text, &style, max_glyphs)
     }
 }

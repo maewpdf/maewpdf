@@ -106,6 +106,8 @@ fn reading_colours_preference_round_trips() {
 
 #[test]
 fn reading_presets_follow_appearance_and_do_not_change_the_interface_theme() {
+    // It draws with the GPU, which only one test may use at a time: two at once crashed the run.
+    let _gpu = crate::gpu();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1000.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();

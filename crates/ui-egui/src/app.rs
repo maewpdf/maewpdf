@@ -298,6 +298,7 @@ impl PdfCraftApp {
             comment_clipboard: None,
             object_clipboard: None,
             object_clip_mark: Default::default(),
+            object_copy_pass: 0,
             grid_drop: None,
             last_snapshot: None,
             last_snapshot_of: None,

@@ -560,6 +560,11 @@ pub fn text_rect(t: &AddedText) -> [f64; 4] {
     }
     // The first line is 1.2 em tall; each further one adds the line spacing (Thai edition).
     let h = (lines(t).len().max(1) - 1) as f64 * t.line_advance() + t.size * 1.2;
+    // A box stretched taller than its lines keeps the height it was given (Thai edition), as a
+    // text box in Word does: its text stays at the top, in its own size. It grows when the
+    // lines need more. It snapped back to its lines, so a box could not be made taller.
+    let given = r[3] - r[1];
+    let h = if t.fixed_height && given.is_finite() && given > h { given } else { h };
     [r[0], r[3] - h, r[2], r[3]]
 }
 

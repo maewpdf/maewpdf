@@ -617,6 +617,9 @@ impl Automation {
                     char_spacing: a.opt_num("char_spacing")?,
                     scale: a.opt_num("scale")?,
                     width,
+                    // Thai edition: the box's height, kept with the paragraph (dragging its top
+                    // or bottom edge); its text keeps its size.
+                    height: a.opt_num("height")?,
                     ..Default::default()
                 };
                 let (dx, dy) = (a.opt_num("dx")?, a.opt_num("dy")?);
@@ -732,6 +735,7 @@ impl Automation {
             "links_remove" => self.links_remove(&a)?,
             "object_list" => self.object_list(&a)?,
             "object_move" => self.object_move(&a)?,
+            "object_group" => self.object_group(&a)?,
             "object_copy" => self.object_copy(&a)?,
             "object_paste" => self.object_paste(&a)?,
             "content_list" => self.content_list(&a)?,

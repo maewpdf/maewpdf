@@ -5049,11 +5049,15 @@ fn edit_composer_preserves_only_typewriter_whitespace(kind: u8) {
 
 #[test]
 fn typewriter_edit_composer_keeps_trailing_blank_lines() {
+    // It draws with the GPU, which only one test may use at a time: two at once crashed the run.
+    let _gpu = crate::gpu();
     edit_composer_preserves_only_typewriter_whitespace(0);
 }
 
 #[test]
 fn other_edit_composers_keep_trimming_trailing_whitespace() {
+    // It draws with the GPU, which only one test may use at a time: two at once crashed the run.
+    let _gpu = crate::gpu();
     for kind in [1, 2] {
         edit_composer_preserves_only_typewriter_whitespace(kind);
     }

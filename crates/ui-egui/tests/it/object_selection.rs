@@ -406,6 +406,30 @@ fn modifier_selection_picks_foreground_text_and_added_items_over_background_artw
     }
 }
 
+/// Thai edition: an area dragged on a scanned page (a picture filling the page, under an OCR
+/// layer) picks what lies on the scan, not the scan: three boxes dragged round for a merge came
+/// with the page's scan.
+#[test]
+fn an_area_dragged_on_a_scan_leaves_the_scan_out() {
+    let mut h = harness_document(false, true);
+    {
+        let app = h.state_mut();
+        let id = app.views[0].id;
+        let word = pdfcraft_engine::ocr::PlacedWord {
+            text: "scan".into(),
+            origin: [300.0, 30.0],
+            across: [30.0, 0.0],
+            up: [0.0, 10.0],
+            confidence: None,
+            source: "t".into(),
+        };
+        app.session.apply(id, Edit::AddOcrText { page: 0, words: vec![word] }).unwrap();
+    }
+    crate::support::settle(&mut h);
+    // The headline, the figure and the added note, not the scan behind them.
+    marquee(&mut h);
+}
+
 fn added_texts(h: &Harness<'static, PdfCraftApp>) -> Vec<(String, [f64; 4])> {
     let app = h.state();
     app.session
@@ -587,8 +611,8 @@ fn a_pasted_paragraph_keeps_the_size_and_look_of_a_dragged_copy() {
 }
 
 /// Thai edition: text boxes selected together (here three on one line and one under them, as
-/// Word's PDFs set a line word by word) merge into one text box where they were, from the
-/// page's right-click menu: their text in reading order, one undo step.
+/// Word's PDFs set a line word by word) merge into one group from the page's right-click menu:
+/// each stays where it was, as it was, and a click on one selects them all. One undo step.
 #[test]
 fn selected_text_boxes_merge_into_one_in_place() {
     let mut h = harness();
@@ -614,13 +638,15 @@ fn selected_text_boxes_merge_into_one_in_place() {
     h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
     h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(3);
+    let lines_before = text_shape(&h);
     h.get_by_label("Merge text boxes").click();
     crate::support::settle(&mut h);
     let after = added_texts(&h);
-    assert_eq!(after.len(), before - 3, "four boxes became one: {after:?}");
-    let (text, rect) = after.iter().find(|(t, _)| t.contains("aaa")).cloned().expect("the merged box");
-    assert_eq!(text, "aaa bbb ccc\nddd");
-    assert!((rect[0] - 60.0).abs() < 0.5 && (rect[3] - 314.0).abs() < 0.5, "where they were: {rect:?}");
+    assert_eq!(after.len(), before - 4, "the four boxes became text of the page: {after:?}");
+    assert_eq!(text_shape(&h), lines_before, "every line where it was, as it was");
+    let groups = groups_of(&h, &["aaa", "bbb", "ccc", "ddd"]);
+    assert!(groups[0].is_some() && groups.iter().all(|g| *g == groups[0]), "one group: {groups:?}");
+    h.get_by_label("4 objects selected");
     let doc = h.state().session.get(id).unwrap();
     assert_eq!(doc.can_undo(), Some("Merge text boxes"), "one step");
     assert!(h.state_mut().execute("edit.undo"));
@@ -646,15 +672,30 @@ fn page_paragraphs_and_added_boxes_merge() {
     h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
     h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(3);
+    let lines_before = text_shape(&h);
     h.get_by_label("Merge text boxes").click();
     crate::support::settle(&mut h);
-    assert!(
-        objects(&h).iter().all(|o| o.text.as_deref() != Some("Keep here") || o.target.kind != pdfcraft_engine::ObjectKind::Text),
-        "the paragraph left the page's text"
-    );
-    let merged = added_texts(&h).into_iter().find(|(t, _)| t.contains("Keep here")).expect("merged");
-    assert_eq!(merged.0, "Keep here More");
-    assert!((merged.1[0] - keep[0]).abs() < 1.0, "where it was: {:?} vs {keep:?}", merged.1);
+    assert_eq!(text_shape(&h), lines_before, "every line where it was, as it was");
+    let groups = groups_of(&h, &["Keep here", "More"]);
+    assert!(groups[0].is_some() && groups[0] == groups[1], "one group: {groups:?}");
+    assert!(added_texts(&h).iter().all(|(t, _)| t != "More"), "the box became text of the page");
+}
+
+/// Every line of text on page 1: its text, box (rounded to a hundredth) and colour.
+fn text_shape(h: &Harness<'static, PdfCraftApp>) -> Vec<(String, [i64; 4], [f64; 3])> {
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    let mut lines: Vec<_> =
+        doc.text_lines(0).into_iter().map(|l| (l.text.trim().to_owned(), l.rect.map(|v| (v * 100.0).round() as i64), l.color)).collect();
+    lines.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    lines
+}
+
+/// The group (Thai edition: Merge text boxes) of the paragraph holding each text on page 1.
+fn groups_of(h: &Harness<'static, PdfCraftApp>, texts: &[&str]) -> Vec<Option<u32>> {
+    let s = h.state();
+    let blocks = s.session.get(s.views[0].id).unwrap().text_blocks(0);
+    texts.iter().map(|w| blocks.iter().find(|b| b.text.contains(w)).and_then(|b| b.group)).collect()
 }
 
 /// Several objects selected together are copied with ⌘C and pasted with ⌘V at once (the object
@@ -890,6 +931,347 @@ fn a_page_paragraph_splits_by_its_rows() {
     assert!(tops[0] > tops[1] && tops[1] > tops[2], "each where its row was: {tops:?}");
     assert!(after.iter().all(|(_, r)| (r[0] - 80.0).abs() < 1.0), "at the paragraph's left: {after:?}");
     assert!(objects_of(&h).iter().all(|o| o.target.kind != pdfcraft_engine::ObjectKind::Text), "the paragraph left the page's text: {block:?}");
+}
+
+/// A page of three rows read as one paragraph, the first red, the others black, open in Edit
+/// text at 100%.
+fn red_first_row_app() -> Harness<'static, PdfCraftApp> {
+    let content = "BT /F1 12 Tf 14 TL 1 0 0 rg 80 300 Td (Row one here) Tj 0 g T* (Row two here) Tj T* (Row three here) Tj ET";
+    let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 500] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+        stream,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("rows.pdf", None, pdf.clone()).unwrap();
+        app.set_option("zoom", "100").unwrap();
+        assert!(app.execute("edit.edit_text"));
+        app
+    });
+    crate::support::settle(&mut h);
+    h
+}
+
+/// The colour each piece of text on page 1 is drawn in, by its text.
+fn colours_by_text(h: &Harness<'static, PdfCraftApp>) -> Vec<(String, [f64; 3])> {
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    let mut out: Vec<(String, [f64; 3])> = doc.text_lines(0).into_iter().map(|l| (l.text.trim().to_owned(), l.color)).collect();
+    for a in doc.added().iter().filter(|a| a.page == 0) {
+        if let pdfcraft_engine::AddedContent::Text(t) = &a.content {
+            out.push((t.text.trim().to_owned(), t.color));
+        }
+    }
+    out
+}
+
+/// Thai edition: a paragraph of a red row and black rows splits into lines and at spaces each
+/// piece in its own colour. Every piece took the colour of the paragraph's first part.
+#[test]
+fn a_split_keeps_each_parts_own_colour() {
+    for menu in ["Split into lines", "Split at spaces"] {
+        let mut h = red_first_row_app();
+        let p = at(&h, 120.0, 500.0 - 304.0);
+        click(&mut h, p, Modifiers::NONE);
+        right_click(&mut h, p);
+        h.get_by_label(menu).click();
+        crate::support::settle(&mut h);
+        let colours = colours_by_text(&h);
+        let of = |w: &str| colours.iter().find(|(t, _)| t == w).map(|(_, c)| *c).unwrap_or_else(|| panic!("{menu}: {w}: {colours:?}"));
+        let (red, black) = if menu == "Split into lines" { ("Row one here", "Row two here") } else { ("one", "two") };
+        assert_eq!(of(red), [1.0, 0.0, 0.0], "{menu}: the red row stays red: {colours:?}");
+        assert_eq!(of(black), [0.0; 3], "{menu}: a black row stays black: {colours:?}");
+    }
+}
+
+/// Thai edition: a paragraph right-clicked unselected is selected and its menu opens (Split into
+/// lines): it gave the page's menu until it was clicked first, so the same box showed one menu
+/// or the other.
+#[test]
+fn a_right_click_on_a_paragraph_opens_its_own_menu() {
+    let mut h = red_first_row_app();
+    let p = at(&h, 120.0, 500.0 - 304.0);
+    h.hover_at(p);
+    h.run_steps(2);
+    right_click(&mut h, p);
+    h.run_steps(2);
+    assert!(h.query_by_label("Split into lines").is_some(), "the paragraph's own menu");
+    h.get_by_label("1 object selected");
+}
+
+/// Thai edition: text over a picture filling the page (a scan under its OCR text, a page's
+/// background) right-clicked gives the text's menu, not the picture's Copy image.
+#[test]
+fn a_right_click_on_text_over_a_page_picture_is_the_texts() {
+    let mut h = harness_document(false, true);
+    let p = at(&h, 55.0, 70.0);
+    h.hover_at(p);
+    h.run_steps(2);
+    right_click(&mut h, p);
+    h.run_steps(2);
+    assert!(h.query_by_label("Copy image").is_none(), "the picture under the text isn't what was right-clicked");
+    h.get_by_label("1 object selected");
+}
+
+/// The text on page 1 at a view point (x right, y down from the top of the 400 × 500 page).
+fn objects_at(h: &Harness<'static, PdfCraftApp>, text: &str) -> Option<EditableObject> {
+    objects(h).into_iter().find(|o| o.text.as_deref().is_some_and(|t| t.contains(text)))
+}
+
+/// The middle of an object on screen.
+fn middle(h: &Harness<'static, PdfCraftApp>, o: &EditableObject) -> Pos2 {
+    at(h, ((o.rect[0] + o.rect[2]) / 2.0) as f32, (500.0 - (o.rect[1] + o.rect[3]) / 2.0) as f32)
+}
+
+/// Thai edition, as the owner did it: an OCR row split at its spaces, a part of the first box made
+/// red, the two boxes merged back. Each part keeps its colour and its place, and the two are one
+/// group. The merged box came out all red, the words run together.
+#[test]
+fn merging_boxes_split_from_an_ocr_row_keeps_their_colours() {
+    let mut h = harness();
+    {
+        let app = h.state_mut();
+        let id = app.views[0].id;
+        let word = |text: &str, x: f64, w: f64| pdfcraft_engine::ocr::PlacedWord {
+            text: text.into(),
+            origin: [x, 200.0],
+            across: [w, 0.0],
+            up: [0.0, 14.0],
+            confidence: None,
+            source: "t".into(),
+        };
+        let words = vec![word("แทนข้าพเจ้าจนเสร็จการ", 60.0, 110.0), word("ข้าพเจ้ายอมรับผิดชอบ", 175.0, 100.0)];
+        app.session.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();
+    }
+    crate::support::settle(&mut h);
+    let row = objects_at(&h, "ยอมรับ").expect("the OCR row");
+    let p = middle(&h, &row);
+    click(&mut h, p, Modifiers::NONE);
+    right_click(&mut h, p);
+    h.get_by_label("Split at spaces").click();
+    crate::support::settle(&mut h);
+    // "แทน" made red in the first box, as Format text does to a part of an added box being typed.
+    let first = added_texts(&h).into_iter().position(|(t, _)| t.starts_with("แทน")).expect("the first box");
+    let box_text = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        match &doc.added().iter().filter(|a| a.page == 0).nth(first).unwrap().content {
+            pdfcraft_engine::AddedContent::Text(t) => t.clone(),
+            _ => unreachable!(),
+        }
+    };
+    let part = pdfcraft_engine::RangeStyle {
+        range: 0..3,
+        family: None,
+        resource: None,
+        size: None,
+        color: Some([0.9, 0.1, 0.1]),
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
+    let edit = Edit::Batch {
+        label: "Edit text".into(),
+        edits: vec![Edit::DeleteContent { page: 0, index: first }, Edit::AddTextPart { page: 0, text: box_text, part }],
+    };
+    assert!(h.state_mut().apply_edit(edit));
+    crate::support::settle(&mut h);
+    let (a, b) = (objects_at(&h, "แทน").expect("the red box"), objects_at(&h, "ยอมรับ").expect("the other box"));
+    let (pa, pb) = (middle(&h, &a), middle(&h, &b));
+    click(&mut h, pa, Modifiers::NONE);
+    click(&mut h, pb, Modifiers::SHIFT);
+    h.get_by_label("2 objects selected");
+    let lines_before = text_shape(&h);
+    right_click(&mut h, pa);
+    h.get_by_label("Merge text boxes").click();
+    crate::support::settle(&mut h);
+    assert_eq!(text_shape(&h), lines_before, "every part where it was, in its colour");
+    let groups = groups_of(&h, &["แทน", "ยอมรับ"]);
+    assert!(groups[0].is_some() && groups[0] == groups[1], "one group: {groups:?}");
+    let colours = colours_by_text(&h);
+    let red: Vec<&String> = colours.iter().filter(|(_, c)| *c == [0.9, 0.1, 0.1]).map(|(t, _)| t).collect();
+    assert!(!red.is_empty() && red.iter().all(|t| t.as_str() == "แทน"), "only แทน is red: {colours:?}");
+}
+
+/// Thai edition: an OCR row (English and Thai, read in Helvetica) selected shows in Format text in
+/// the face it is drawn in, and black picked for it draws it in black: black is the colour its
+/// invisible text reads as, so picking it changed nothing until another colour was picked
+/// first, and the font shown was the one it was read in.
+#[test]
+fn black_picked_for_a_selected_ocr_row_draws_it() {
+    let mut h = harness();
+    {
+        let app = h.state_mut();
+        let id = app.views[0].id;
+        let word = |text: &str, x: f64, w: f64| pdfcraft_engine::ocr::PlacedWord {
+            text: text.into(),
+            origin: [x, 200.0],
+            across: [w, 0.0],
+            up: [0.0, 14.0],
+            confidence: None,
+            source: "t".into(),
+        };
+        let words = vec![word("(E-Mail)", 60.0, 40.0), word("ระบบ", 105.0, 25.0), word("Intranet", 135.0, 40.0)];
+        app.session.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();
+    }
+    crate::support::settle(&mut h);
+    let row = objects_at(&h, "Intranet").expect("the OCR row");
+    let p = middle(&h, &row);
+    click(&mut h, p, Modifiers::NONE);
+    h.get_by_label("1 object selected");
+    h.get_by_label("Colour").click();
+    h.run_steps(3);
+    h.get_by_label("Black").click();
+    crate::support::settle(&mut h);
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    let block = doc.text_blocks(0).into_iter().find(|b| b.text.contains("Intranet")).expect("the row");
+    assert!(!block.invisible, "drawn: {block:?}");
+    assert_eq!(block.color, [0.0; 3]);
+}
+
+/// Four OCR rows of one paragraph on page 1, the first set in, as a scan reads them.
+fn four_ocr_rows(h: &mut Harness<'static, PdfCraftApp>) {
+    let app = h.state_mut();
+    let id = app.views[0].id;
+    let rows = [(90.0, "แม้มิได้มีการกำหนดไว้"), (60.0, "นำความอับอายเสื่อมเสีย"), (60.0, "ตนหรือเพื่อช่วยเหลือ"), (60.0, "หน่วยงานอื่นที่นอกเหนือ")];
+    let words = rows
+        .iter()
+        .enumerate()
+        .map(|(k, (x, text))| pdfcraft_engine::ocr::PlacedWord {
+            text: (*text).into(),
+            origin: [*x, 260.0 - 20.0 * k as f64],
+            across: [text.chars().count() as f64 * 6.0, 0.0],
+            up: [0.0, 14.0],
+            confidence: None,
+            source: "t".into(),
+        })
+        .collect();
+    app.session.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();
+    crate::support::settle(h);
+}
+
+/// Select the paragraphs holding `texts`: a click on the first, Shift+click on the rest.
+fn select_texts(h: &mut Harness<'static, PdfCraftApp>, texts: &[&str]) {
+    for (k, text) in texts.iter().enumerate() {
+        let o = objects_at(h, text).unwrap_or_else(|| panic!("{text}"));
+        let p = middle(h, &o);
+        click(h, p, if k == 0 { Modifiers::NONE } else { Modifiers::SHIFT });
+    }
+}
+
+/// The left edge of the paragraph holding each text on page 1.
+fn lefts_of(h: &Harness<'static, PdfCraftApp>, texts: &[&str]) -> Vec<f64> {
+    let s = h.state();
+    let blocks = s.session.get(s.views[0].id).unwrap().text_blocks(0);
+    texts.iter().map(|w| blocks.iter().find(|b| b.text.contains(w)).map_or(f64::NAN, |b| b.rect[0])).collect()
+}
+
+const ROWS: [&str; 4] = ["แม้มิได้", "นำความ", "ตนหรือ", "หน่วยงาน"];
+
+/// Thai edition: four OCR rows merged stay a group where they were; black, then red, picked for
+/// the group draws every row in it, each row where it was (the first still set in).
+#[test]
+fn a_colour_picked_for_merged_ocr_rows_draws_each_in_place() {
+    let mut h = harness();
+    four_ocr_rows(&mut h);
+    let lefts = lefts_of(&h, &ROWS);
+    select_texts(&mut h, &ROWS);
+    h.get_by_label("4 objects selected");
+    let p = middle(&h, &objects_at(&h, "นำความ").unwrap());
+    right_click(&mut h, p);
+    h.get_by_label("Merge text boxes").click();
+    crate::support::settle(&mut h);
+    h.get_by_label("4 objects selected");
+    for (colour, rgb) in [("Black", [0.0; 3]), ("Red", [0.0; 3])] {
+        h.get_by_label("Colour").click();
+        h.run_steps(3);
+        h.get_by_label(colour).click();
+        crate::support::settle(&mut h);
+        let s = h.state();
+        let blocks = s.session.get(s.views[0].id).unwrap().text_blocks(0);
+        for w in ROWS {
+            let b = blocks.iter().find(|b| b.text.contains(w)).unwrap_or_else(|| panic!("{colour}: {w}: {blocks:?}"));
+            assert!(!b.invisible, "{colour}: {w} drawn: {b:?}");
+            assert!(b.group.is_some(), "{colour}: {w} still in the group");
+            if colour == "Black" {
+                assert_eq!(b.color, rgb, "{w}");
+            } else {
+                assert!(b.color[0] > 0.7 && b.color[1] < 0.4, "{w} red: {:?}", b.color);
+            }
+        }
+        let now = lefts_of(&h, &ROWS);
+        for (a, b) in lefts.iter().zip(&now) {
+            assert!((a - b).abs() < 1.0, "{colour}: each row where it was: {lefts:?} -> {now:?}");
+        }
+        h.get_by_label("4 objects selected");
+    }
+}
+
+/// Thai edition: a click on a paragraph selects it and leaves it where it was. Clicked a hair
+/// above the line under it, an OCR row snapped down onto that line's top (the smart guides
+/// pulled it before the pointer had moved at all).
+#[test]
+fn a_click_on_a_row_leaves_it_where_it_was() {
+    let mut h = harness();
+    four_ocr_rows(&mut h);
+    let before = text_shape(&h);
+    let p = middle(&h, &objects_at(&h, ROWS[0]).unwrap());
+    click(&mut h, p, Modifiers::NONE);
+    h.get_by_label("1 object selected");
+    assert_eq!(text_shape(&h), before);
+}
+
+/// Thai edition: a click on one paragraph of a merged group selects the group; Shift+click takes
+/// it out whole; Ungroup text boxes leaves each as it was, no longer together.
+#[test]
+fn a_merged_group_is_selected_and_ungrouped_whole() {
+    let mut h = harness();
+    four_ocr_rows(&mut h);
+    let before = text_shape(&h);
+    select_texts(&mut h, &ROWS);
+    let p = middle(&h, &objects_at(&h, "นำความ").unwrap());
+    right_click(&mut h, p);
+    h.get_by_label("Merge text boxes").click();
+    crate::support::settle(&mut h);
+    assert_eq!(text_shape(&h), before, "merged, each where it was");
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    let q = middle(&h, &objects_at(&h, "ตนหรือ").unwrap());
+    click(&mut h, q, Modifiers::NONE);
+    h.get_by_label("4 objects selected");
+    let note = added_texts(&h).into_iter().find(|(t, _)| t == "Added note").expect("the note").1;
+    let n = at(&h, ((note[0] + note[2]) / 2.0) as f32, (500.0 - (note[1] + note[3]) / 2.0) as f32);
+    click(&mut h, n, Modifiers::SHIFT);
+    h.get_by_label("5 objects selected");
+    click(&mut h, q, Modifiers::SHIFT);
+    h.get_by_label("1 object selected");
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    click(&mut h, q, Modifiers::NONE);
+    right_click(&mut h, q);
+    assert!(h.query_by_label("Merge text boxes").is_none(), "already merged");
+    h.get_by_label("Ungroup text boxes").click();
+    crate::support::settle(&mut h);
+    assert!(groups_of(&h, &ROWS).iter().all(Option::is_none), "no group");
+    assert_eq!(text_shape(&h), before, "each as it was");
 }
 
 fn objects_of(h: &Harness<'static, PdfCraftApp>) -> Vec<EditableObject> {
@@ -1276,4 +1658,35 @@ fn a_picture_for_a_native_edit_paste_with_a_context_menu_open_lands_on_the_page(
     h.run_steps(3);
     assert_ne!(can_undo(&h, 0), before, "the picture was dropped");
     assert_eq!(can_undo(&h, 0).as_deref(), Some("Add image"), "the picture landed on the page");
+}
+
+/// Thai edition: a text box copied after objects of the same words is the newer copy, and ⌘V
+/// pastes it. The paste compared the words alone, and the owner's plain heading, copied after a
+/// coloured copy of it, pasted the coloured copy again.
+#[test]
+fn a_text_box_copied_after_objects_of_the_same_words_pastes_itself() {
+    let mut h = harness();
+    h.state_mut().system_clipboard = false;
+    let words = "Keep here";
+    let plain = AddedText { text: words.into(), rect: [130.0, 120.0, 230.0, 150.0], ..Default::default() };
+    assert!(h.state_mut().apply_edit(Edit::AddText { page: 0, text: plain }));
+    h.run_steps(3);
+    let keep = objects(&h).into_iter().find(|o| o.target.kind == pdfcraft_engine::ObjectKind::Text && o.text.as_deref() == Some(words)).unwrap().rect;
+    let p = at(&h, ((keep[0] + keep[2]) / 2.0) as f32, (500.0 - (keep[1] + keep[3]) / 2.0) as f32);
+    click(&mut h, p, Modifiers::NONE);
+    h.event(egui::Event::Copy);
+    h.run_steps(2);
+    assert!(h.state().object_clipboard.is_some(), "the paragraph copied as an object");
+    keys(&mut h, Modifiers::NONE, Key::Escape);
+    let index = added_texts(&h).iter().position(|(t, r)| t == words && r[1] < 200.0).unwrap();
+    h.state_mut().views[0].content.selected = Some((0, index));
+    h.run_steps(1);
+    h.event(egui::Event::Copy);
+    h.run_steps(2);
+    assert!(h.state().object_clipboard.is_none(), "the newer copy of the same words replaces the objects");
+    let boxes = added_texts(&h).iter().filter(|(t, _)| t == words).count();
+    h.event(egui::Event::Paste(words.into()));
+    h.run_steps(4);
+    assert_ne!(can_undo(&h, 0).as_deref(), Some("Paste"), "not the objects copied before");
+    assert_eq!(added_texts(&h).iter().filter(|(t, _)| t == words).count(), boxes + 1, "the text box, pasted");
 }

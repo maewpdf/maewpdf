@@ -1794,7 +1794,8 @@ fn prepare_image_drag_picture(ctx: &egui::Context, view: &mut DocView, doc: &pdf
     let Some(index) = view
         .image_selection
         .as_ref()
-        .filter(|s| s.page == page && s.drag.is_some_and(|d| !matches!(d.target, crate::edit_text_ui::DragTarget::Rotate)))
+        // A turn shows the picture turning too (Thai edition): it was hidden, the frame alone shown.
+        .filter(|s| s.page == page && s.drag.is_some())
         .map(|s| s.index)
     else {
         return;

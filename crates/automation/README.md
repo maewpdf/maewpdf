@@ -160,7 +160,9 @@ moves 1–1000 references atomically in displayed points (right/down), preservin
 and fonts. A refusal changes nothing; success is one undo step. `all: true` takes every object on the
 page instead, as ⌘A does. `object_copy {doc, page, objects | all, cut?}` copies them with every
 resource they use and `object_paste {doc, page}` pastes them as page content that draws the same,
-into the same or another open document, stepped as the app steps a paste. See
+into the same or another open document, stepped as the app steps a paste. `object_group {doc, page,
+objects, ungroup?}` (Thai edition) merges text objects into one group, each where it was, and
+`object_list` shows the group each paragraph is in. See
 [the selection and movement guide](../../docs/editing-multiple-objects.md) for limits and examples.
 
 ## Accessibility review record

@@ -134,6 +134,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::MovePageImageToPage { .. }
         | Edit::ArrangeContent { .. }
         | Edit::ArrangeParagraph { .. }
+        | Edit::GroupText { .. }
         | Edit::ReplaceImage { .. }
         | Edit::PasteContent { .. }
         | Edit::PasteObjects { .. }
@@ -975,18 +976,47 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 .flatten()
                 .filter(|font| font != pdfcraft_fonts::thai_text::INVISIBLE_NAME);
             // A word of an OCR layer is rewritten in a font that draws: its own has only empty
-            // glyphs, though it can encode anything.
+            // glyphs, though it can encode anything. A row of the Thai layer whose English words it
+            // wrote in stretched Helvetica reads as Helvetica, but it is drawn invisibly all the
+            // same (Thai edition): rewritten as Helvetica it lost the stretch and came out far
+            // smaller than the scan. A row of English alone keeps the OCR word edits, which
+            // rewrite only the words changed, each as wide as the scan shows it.
             let ocr_word = !text.is_empty()
                 && style.family.is_none()
                 && style.resource.is_none()
                 && pdfcraft_edit::text_blocks(doc, *page)
                     .ok()
-                    .and_then(|b| b.get(*block).map(|b| b.base_font == pdfcraft_fonts::thai_text::INVISIBLE_NAME))
+                    .and_then(|b| b.get(*block).map(|b| thai_ocr_row(b) || b.base_font == pdfcraft_fonts::thai_text::INVISIBLE_NAME))
                     .unwrap_or(false);
             let family =
                 if crate::FontFamily::Sarabun.craft(false, false).is_some() { crate::FontFamily::Sarabun } else { crate::FontFamily::Helvetica };
-            let drawn = crate::BlockStyle { family: Some((family, false, false)), ..style.clone() };
-            let edit = pdfcraft_edit::rewrite_block(doc, *page, *block, Some(text), if ocr_word { &drawn } else { style })?;
+            // An OCR row first drawn is fitted to the scanned row's width (Thai edition).
+            let read = (ocr_word && style.size.is_none())
+                .then(|| pdfcraft_edit::text_blocks(doc, *page).ok()?.into_iter().nth(*block))
+                .flatten()
+                .filter(|b| b.rows.len() == 1);
+            // Its first drawing has room past the row, as a reveal's, so it isn't broken at the box's
+            // edge before it is measured.
+            let room = read.as_ref().map(|b| (b.rect[2] - b.rect[0]).abs() * 3.0 + b.size.abs() * 4.0);
+            let drawn = crate::BlockStyle { family: Some((family, false, false)), width: style.width.or(room), ..style.clone() };
+            // A width or letter spacing asked for goes on the row sized to the scan, not into the
+            // sizing, which undid it: drawn plain first, fitted, then given them.
+            let asked = read.is_some() && (style.scale.is_some() || style.char_spacing.is_some());
+            let plain = crate::BlockStyle { scale: None, char_spacing: None, ..drawn.clone() };
+            let first = if asked { &plain } else { &drawn };
+            let edit = pdfcraft_edit::rewrite_block(doc, *page, *block, Some(text), if ocr_word { first } else { style })?;
+            if let Some(read) = read {
+                let fitted = fit_ocr_row(doc, *page, &read, first)?;
+                if asked && let Some((index, size, text)) = fitted {
+                    let given = crate::BlockStyle {
+                        size: Some(size),
+                        width: first.width.or(Some((read.rect[2] - read.rect[0]).abs() * 3.0 + size * 4.0)),
+                        align: style.align.or(Some(crate::TextAlign::Left)),
+                        ..drawn.clone()
+                    };
+                    pdfcraft_edit::rewrite_block(doc, *page, index, Some(&text), &given)?;
+                }
+            }
             if let (Some(font), Some(used)) = (own, edit.substituted) {
                 cx.font_fallbacks.push(crate::FontFallback { page: *page, font: plain_font_name(&font), used: plain_font_name(&used) });
             }
@@ -1069,8 +1099,8 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             reveal_covered_text(doc, *page, *rect)?;
         }
         Edit::AddTextPart { page, text, part } => {
-            let (block, b) = released_text(doc, *page, text)?;
-            let range = pdfcraft_edit::RangeStyle { range: editor_range(&text.text, &b.editor_text, part.range.clone()), ..part.clone() };
+            let (block, b, skip) = released_text(doc, *page, text)?;
+            let range = pdfcraft_edit::RangeStyle { range: editor_range_after(&text.text, &b.editor_text, part.range.clone(), skip), ..part.clone() };
             if range.range.start >= range.range.end {
                 return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("the part of the text to format is empty".into())));
             }
@@ -1078,27 +1108,45 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_edit::rewrite_block(doc, *page, block, Some(&b.editor_text), &style)?;
         }
         Edit::AddStyledText { page, text, runs } => {
-            let index = pdfcraft_edit::add_content(doc, *page, &AddedContent::Text(text.clone()))?;
+            // Drawn first without an underline (Thai edition): the box's own rule runs under the
+            // whole line, isn't part of the paragraph it becomes, and stayed on the page under a
+            // copy whose one part was underlined, even after the copy was deleted. The parts
+            // underlined are underlined below, as the rest of their look.
+            let plain = crate::AddedText { underline: false, ..text.clone() };
+            let index = pdfcraft_edit::add_content(doc, *page, &AddedContent::Text(plain))?;
             pdfcraft_edit::release_content(doc, *page, index)?;
-            // The paragraph it became: the last one of the page with its text.
+            // The paragraph it became: the last one of the page with its text, or the one over
+            // its box holding it, read as one with text beside it (Thai edition; see
+            // [`released_block`]).
             let blocks = pdfcraft_edit::text_blocks(doc, *page)?;
             let same = |b: &pdfcraft_edit::TextBlock| {
                 b.editor_text.chars().filter(|c| !c.is_whitespace()).eq(text.text.chars().filter(|c| !c.is_whitespace()))
             };
-            if let Some((block, b)) = blocks.iter().enumerate().rev().find(|(_, b)| same(b)) {
+            let found = match blocks.iter().enumerate().rev().find(|(_, b)| same(b)) {
+                Some((block, b)) => Some((block, b, None)),
+                None => released_block(&blocks, text).and_then(|(i, skip)| blocks.get(i).map(|b| (i, b, Some(skip)))),
+            };
+            if let Some((block, b, joined)) = found {
                 let byte = |n: usize| b.editor_text.char_indices().nth(n).map_or(b.editor_text.len(), |(i, _)| i);
+                let range = |chars: std::ops::Range<usize>| match joined {
+                    Some(skip) => editor_range_after(&text.text, &b.editor_text, chars, skip),
+                    None => byte(chars.start)..byte(chars.end),
+                };
                 let ranges = runs
                     .iter()
                     .filter(|r| r.chars.start < r.chars.end)
                     .map(|r| pdfcraft_edit::RangeStyle {
-                        range: byte(r.chars.start)..byte(r.chars.end),
+                        range: range(r.chars.clone()),
                         // Each part's weight, slant and underline too (Thai edition), where they
                         // differ from the text's own.
                         family: (r.bold != text.bold || r.italic != text.italic).then_some((text.family, r.bold, r.italic)),
                         resource: None,
                         size: (r.size.is_finite() && r.size > 0.0 && (r.size - text.size).abs() > 0.01).then_some(r.size),
                         color: Some(r.color),
-                        underline: (r.underline != text.underline).then_some(r.underline),
+                        // An underline asked for, also where the text's own is (Thai edition): the
+                        // box's rule isn't read back as the paragraph's underline, so a copy
+                        // recoloured part by part came out without it.
+                        underline: r.underline.then_some(true),
                         char_spacing: None,
                         scale: None,
                     })
@@ -1115,6 +1163,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_edit::arrange_content(doc, *page, *index, *how)?;
         }
         Edit::ArrangeParagraph { page, block, how } => pdfcraft_edit::arrange_paragraph(doc, *page, *block, *how)?,
+        Edit::GroupText { page, blocks, added, group } => pdfcraft_edit::group_paragraphs(doc, *page, blocks, added, *group)?,
         Edit::MoveContentToPage { page, index, to_page, content, copy } => {
             if page == to_page && !copy {
                 return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("the item is already on that page".into())));
@@ -1333,8 +1382,98 @@ fn run_batch(doc: &mut pdfcraft_cos::Document, edits: &[Edit], cx: &mut EditCtx)
     Ok(())
 }
 
-/// A font name as shown to people (Thai edition): without the `ABCDEF+` subset tag a PDF adds, or
-/// the `Type3` suffix a generated fallback font carries.
+/// The largest size an OCR row is grown to, in heights of its scanned box (Thai edition): a Thai
+/// word's marks above and below fill most of TH Sarabun PSK's em (the layer reads Thai at about
+/// 1.1), its English letters little of it (their capitals are under half an em).
+const OCR_ROW_TALLEST: [f64; 2] = [1.2, 1.7];
+
+/// The size an OCR row `read` drawn at `size` and `width` wide is written again at to be as wide
+/// as the scanned row (Thai edition), or `None` when it is near enough. A row too wide shrinks; one
+/// too narrow grows too (English words read in stretched Helvetica came out in a face of narrower
+/// letters at that size, far smaller than the scan's), but no taller than the scanned row allows,
+/// so a short word in a wide box doesn't balloon.
+fn ocr_fit_size(read: &pdfcraft_edit::TextBlock, size: f64, width: f64) -> Option<f64> {
+    let row = (read.rect[2] - read.rect[0]).abs();
+    if !(row > 0.0 && width > 0.0 && size > 0.0) {
+        return None;
+    }
+    // A hair under the row, so the rewrite's own measure doesn't reach past it.
+    let fit = size * row / width * 0.99;
+    let letters = read.text.chars().filter(|c| c.is_alphabetic());
+    let (thai, all) = letters.fold((0usize, 0usize), |(t, a), c| (t + usize::from(('\u{0E00}'..='\u{0E7F}').contains(&c)), a + 1));
+    let tallest = (read.rect[3] - read.rect[1]).abs() * OCR_ROW_TALLEST[usize::from(thai * 2 < all)];
+    let fitted = if width > row * 1.01 {
+        fit
+    } else if width < row * 0.97 {
+        fit.min(tallest)
+    } else {
+        return None;
+    };
+    (fitted.is_finite() && fitted > 0.0 && (fitted - size).abs() >= size * 0.02).then_some(fitted)
+}
+
+/// The face and size an invisible OCR row `b` of one line is drawn in when it is first made visible
+/// (Thai edition): TH Sarabun PSK (Helvetica without it), at the size [`ocr_fit_size`] gives it.
+/// The Format text panel and its preview show the row so, as it will be drawn: they showed the
+/// look it was read in (8 pt Helvetica for a row of English and Thai), and the row came out in
+/// another face at another size. `None` for anything else.
+pub fn ocr_row_look(b: &pdfcraft_edit::TextBlock) -> Option<(crate::FontFamily, f64)> {
+    if !thai_ocr_row(b) || b.rows.len() != 1 || b.rotation != 0.0 || b.size.is_nan() || b.size <= 0.0 {
+        return None;
+    }
+    let family = if crate::FontFamily::Sarabun.craft(false, false).is_some() { crate::FontFamily::Sarabun } else { crate::FontFamily::Helvetica };
+    let look = crate::AddedText { text: b.editor_text.clone(), family, size: b.size, ..Default::default() };
+    let width = crate::added_text_width(&look);
+    Some((family, ocr_fit_size(b, b.size, width).unwrap_or(b.size)))
+}
+
+/// Whether `b` is a row of Thai recognised text, drawn invisibly (Thai edition): what is drawn
+/// again as a whole row in TH Sarabun PSK when it is edited. A row of English alone is the OCR
+/// layer's own, whose words are edited one by one.
+fn thai_ocr_row(b: &pdfcraft_edit::TextBlock) -> bool {
+    b.invisible && b.text.chars().any(|c| ('\u{0E00}'..='\u{0E7F}').contains(&c))
+}
+
+/// A recognised row of one line, just made visible (`read`, as it was), drawn no wider than the
+/// scanned row (Thai edition): when it came out wider, it is written again at the size that
+/// makes it as wide. Recognition sizes a row by its height in the scan, whose face is not TH Sarabun
+/// PSK: a row of Angsana-like print came out a fifth wider than the row it read, broke at the
+/// box's edge over the row below, and looked too tall. The row's width is what the scan shows for
+/// sure; the width drawn is measured, not estimated.
+/// Returns where the row now is (its paragraph index), its size and its text, `None` when it
+/// wasn't found.
+fn fit_ocr_row(
+    doc: &mut pdfcraft_cos::Document,
+    page: usize,
+    read: &pdfcraft_edit::TextBlock,
+    style: &crate::BlockStyle,
+) -> Result<Option<(usize, f64, String)>, EditError> {
+    let row = (read.rect[2] - read.rect[0]).abs();
+    let squeeze = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+    let own = squeeze(&read.text);
+    let blocks = pdfcraft_edit::text_blocks(doc, page)?;
+    let Some((index, drawn)) = blocks
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| !b.invisible && squeeze(&b.text) == own)
+        .min_by(|(_, a), (_, b)| (a.rect[0] - read.rect[0]).abs().total_cmp(&(b.rect[0] - read.rect[0]).abs()))
+    else {
+        return Ok(None);
+    };
+    let width = (drawn.rect[2] - drawn.rect[0]).abs();
+    let Some(size) = ocr_fit_size(read, drawn.size, width) else { return Ok(Some((index, drawn.size, drawn.editor_text.clone()))) };
+    // Room past the row, so the fitted text isn't broken at the box's edge again (as a reveal's).
+    // Kept at the row's left edge: a centred title was centred again in that room, far to the right.
+    let fitted = crate::BlockStyle {
+        size: Some(size),
+        width: style.width.or(Some(row * 3.0 + size * 4.0)),
+        align: style.align.or(Some(crate::TextAlign::Left)),
+        ..style.clone()
+    };
+    pdfcraft_edit::rewrite_block(doc, page, index, Some(&drawn.editor_text), &fitted)?;
+    Ok(Some((index, size, drawn.editor_text.clone())))
+}
+
 /// Thai edition: recognised text (drawn invisibly over a scan) that a cover box hides the scan's
 /// letters under is drawn visibly instead, so the box shows the words it covers: each invisible
 /// paragraph lying mostly inside `rect` is written again as it reads, which draws it.
@@ -1358,28 +1497,45 @@ fn reveal_covered_text(doc: &mut pdfcraft_cos::Document, page: usize, rect: [f64
             ..Default::default()
         };
         pdfcraft_edit::rewrite_block(doc, page, i, Some(&b.editor_text), &style)?;
+        if b.rows.len() == 1 {
+            fit_ocr_row(doc, page, b, &style)?;
+        }
     }
     Ok(())
 }
 
 /// Thai edition: `text` added to `page` and made text of the page; the paragraph it became (the
-/// last of the page with its text, else the one over its box).
+/// last of the page with its text, else the one over its box), and how many visible characters
+/// of that paragraph come before the box's text.
 fn released_text(
     doc: &mut pdfcraft_cos::Document,
     page: usize,
     text: &pdfcraft_edit::AddedText,
-) -> Result<(usize, pdfcraft_edit::TextBlock), EditError> {
+) -> Result<(usize, pdfcraft_edit::TextBlock, usize), EditError> {
     let index = pdfcraft_edit::add_content(doc, page, &AddedContent::Text(text.clone()))?;
     pdfcraft_edit::release_content(doc, page, index)?;
     let blocks = pdfcraft_edit::text_blocks(doc, page)?;
+    released_block(&blocks, text)
+        .and_then(|(i, skip)| blocks.get(i).cloned().map(|b| (i, b, skip)))
+        .ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid("the text box's text was not found on the page after converting it".into())))
+}
+
+/// Thai edition: among `blocks`, the paragraph text `text` (just made text of the page) became:
+/// the last one with its text, else the one over its box holding its text; and how many visible
+/// characters of that paragraph come before it. Text made of a box can read as one paragraph with
+/// the text right beside it (a box above it): its parts were then counted from that paragraph's
+/// start, and "เสมือน" made bold gave "แทนข้า" of the row above.
+fn released_block(blocks: &[pdfcraft_edit::TextBlock], text: &pdfcraft_edit::AddedText) -> Option<(usize, usize)> {
     let visible = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
     let wanted = visible(&text.text);
-    let found = blocks.iter().rposition(|b| visible(&b.editor_text) == wanted).or_else(|| {
-        pdfcraft_edit::block_overlapping(&blocks, text.rect).filter(|&i| blocks.get(i).is_some_and(|b| visible(&b.editor_text).contains(&wanted)))
-    });
-    found
-        .and_then(|i| blocks.get(i).cloned().map(|b| (i, b)))
-        .ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid("the text box's text was not found on the page after converting it".into())))
+    if let Some(i) = blocks.iter().rposition(|b| visible(&b.editor_text) == wanted) {
+        return Some((i, 0));
+    }
+    let i = pdfcraft_edit::block_overlapping(blocks, text.rect)?;
+    let shown = visible(&blocks.get(i)?.editor_text);
+    // The box's text is the last written: its last occurrence.
+    let at = shown.rfind(&wanted)?;
+    Some((i, shown.get(..at)?.chars().count()))
 }
 
 /// Thai edition: where characters `chars` of `text` (the box a paragraph was made from) are in
@@ -1387,14 +1543,22 @@ fn released_text(
 /// characters (its rows may break where the box had a space): from the first visible character
 /// in the range to the end of the last, so a part ending before a space doesn't take the space.
 pub fn editor_range(text: &str, editor: &str, chars: std::ops::Range<usize>) -> std::ops::Range<usize> {
+    editor_range_after(text, editor, chars, 0)
+}
+
+/// [`editor_range`] for `text` written in `editor` after `skip` visible characters of other text
+/// (Thai edition: a box made text of the page that reads as one paragraph with text before it).
+fn editor_range_after(text: &str, editor: &str, chars: std::ops::Range<usize>, skip: usize) -> std::ops::Range<usize> {
     let marks: Vec<(usize, usize)> = editor.char_indices().filter(|(_, c)| !c.is_whitespace()).map(|(i, c)| (i, i + c.len_utf8())).collect();
-    let visible_before = |n: usize| text.chars().take(n).filter(|c| !c.is_whitespace()).count();
+    let visible_before = |n: usize| skip + text.chars().take(n).filter(|c| !c.is_whitespace()).count();
     let (first, last) = (visible_before(chars.start), visible_before(chars.end));
     let start = marks.get(first).map_or(editor.len(), |m| m.0);
     let end = last.checked_sub(1).and_then(|k| marks.get(k)).map_or(start, |m| m.1);
     start..end.max(start)
 }
 
+/// A font name as shown to people (Thai edition): without the `ABCDEF+` subset tag a PDF adds, or
+/// the `Type3` suffix a generated fallback font carries.
 fn plain_font_name(name: &str) -> String {
     let name = match name.split_once('+') {
         Some((tag, rest)) if tag.len() == 6 && tag.bytes().all(|b| b.is_ascii_uppercase()) => rest,

@@ -1,7 +1,7 @@
 //! Same-page mixed selection in Edit a PDF. Source references belong to one document
 //! generation; a drag previews geometry and commits one engine edit on release.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use egui::{Color32, Pos2, Rect, Stroke};
 use pdfcraft_engine::{Document, Edit, EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget};
@@ -37,6 +37,11 @@ pub(crate) struct ObjectSelection {
     /// A paragraph (page, block) to select once the document is at hand: Esc in the inline
     /// editor asks for it, and the next `prepare` selects it.
     select_paragraph: Option<(usize, usize)>,
+    /// The edit and selection the merged groups were last completed for (Thai edition).
+    grouped_for: Option<(u64, Vec<ObjectTarget>)>,
+    /// The merged groups among the selection (Thai edition), each drawn in one frame round its
+    /// paragraphs: a merge shows as one box, not as the boxes it was before.
+    groups: Vec<Vec<ObjectTarget>>,
 }
 
 #[derive(Clone, Copy)]
@@ -183,6 +188,9 @@ impl ObjectSelection {
             self.clear();
             return;
         }
+        // Asked for before an edit that comes now (Thai edition: Merge text boxes selects the group
+        // it made), and kept through the clearing an edit brings.
+        let wanted = self.select_paragraph.take();
         let generation = doc.edit_generation();
         if self.generation != Some(generation) {
             self.cache.clear();
@@ -225,7 +233,7 @@ impl ObjectSelection {
             self.clear();
         }
         // After the Escape check: the Esc that closed the editor must not clear what it selected.
-        if let Some((page, block)) = self.select_paragraph.take()
+        if let Some((page, block)) = wanted.or_else(|| self.select_paragraph.take())
             && let Ok(objects) = self.inventory(doc, page)
             && let Some(object) = objects.into_iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block })
         {
@@ -233,6 +241,53 @@ impl ObjectSelection {
             self.page = Some(page);
             self.selected.push(object);
         }
+        self.complete_groups(doc);
+    }
+
+    /// A merged group (Thai edition) is selected whole: a paragraph of one selected, however it was
+    /// (a click, an area, a right-click, after an edit), brings the rest of its group.
+    fn complete_groups(&mut self, doc: &Document) {
+        let Some(page) = self.page else { return };
+        if self.selected.is_empty() {
+            return;
+        }
+        let key = (doc.edit_generation(), self.selected.iter().map(|o| o.target).collect::<Vec<_>>());
+        if self.grouped_for.as_ref() == Some(&key) {
+            return;
+        }
+        let blocks = doc.text_blocks(page);
+        let group_of = |t: &ObjectTarget| (t.kind == ObjectKind::Text).then(|| blocks.get(t.index).and_then(|b| b.group)).flatten();
+        let groups: BTreeSet<u32> = self.selected.iter().filter_map(|o| group_of(&o.target)).collect();
+        if !groups.is_empty()
+            && let Ok(objects) = self.inventory(doc, page)
+        {
+            for o in objects {
+                if group_of(&o.target).is_some_and(|g| groups.contains(&g)) && !self.selected.iter().any(|s| s.target == o.target) {
+                    self.selected.push(o);
+                }
+            }
+        }
+        let mut drawn: Vec<(u32, Vec<ObjectTarget>)> = Vec::new();
+        for o in &self.selected {
+            if let Some(g) = group_of(&o.target) {
+                match drawn.iter_mut().find(|(k, _)| *k == g) {
+                    Some((_, members)) => members.push(o.target),
+                    None => drawn.push((g, vec![o.target])),
+                }
+            }
+        }
+        self.groups = drawn.into_iter().map(|(_, members)| members).collect();
+        self.grouped_for = Some((doc.edit_generation(), self.selected.iter().map(|o| o.target).collect()));
+    }
+
+    /// `target` and, when it is in a merged group (Thai edition), the rest of its group out of the
+    /// selection: a Shift or Ctrl click takes the group out whole, as a click puts it in whole.
+    fn remove_with_group(&mut self, doc: &Document, page: usize, target: ObjectTarget) {
+        let blocks = doc.text_blocks(page);
+        let group = (target.kind == ObjectKind::Text).then(|| blocks.get(target.index).and_then(|b| b.group)).flatten();
+        self.selected.retain(|o| {
+            o.target != target && !(group.is_some() && o.target.kind == ObjectKind::Text && blocks.get(o.target.index).and_then(|b| b.group) == group)
+        });
     }
 
     /// The move of the whole selection by `offset` (user space). The selection follows it.
@@ -447,8 +502,8 @@ fn gesture_input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut Do
             s.gesture = None;
             if gesture.start.distance(gesture.now) <= DRAG_SLOP {
                 // A Ctrl-click: toggle it in the selection, as every modifier click does.
-                if let Some(index) = s.selected.iter().position(|o| o.target == target) {
-                    s.selected.remove(index);
+                if s.selected.iter().any(|o| o.target == target) {
+                    s.remove_with_group(doc, page, target);
                 } else if let Ok(objects) = s.inventory(doc, page)
                     && let Some(object) = objects.into_iter().find(|o| o.target == target)
                 {
@@ -491,7 +546,16 @@ fn gesture_input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut Do
                 && area.height() > 3.0
                 && let Ok(objects) = s.inventory(doc, page)
             {
-                let candidates: Vec<_> = objects.into_iter().filter(|o| area.intersects(screen(xf, info, page, o))).collect();
+                // A picture the area lies inside (a page's scan behind its text) is what the area
+                // was dragged on, not one of the things dragged round (Thai edition): boxes dragged
+                // round for a merge came with the scan. Dragged past its edges, it is taken.
+                let candidates: Vec<_> = objects
+                    .into_iter()
+                    .filter(|o| {
+                        let r = screen(xf, info, page, o);
+                        area.intersects(r) && !(o.target.kind == ObjectKind::Image && r.contains_rect(area))
+                    })
+                    .collect();
                 let mut selected = s.selected.clone();
                 for object in candidates {
                     if !selected.iter().any(|o| o.target == object.target) {
@@ -506,6 +570,22 @@ fn gesture_input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut Do
             }
             if s.selected.is_empty() {
                 s.clear();
+            }
+        } else if gesture.start.distance(gesture.now) > 3.0
+            && view.pending_edit.is_none()
+            && let Some((to_page, txf)) = view.other_page_at(page, gesture.now)
+        {
+            // Dropped on another page (Thai edition): the objects go there, where they were
+            // dropped, as one step: copied there and deleted here. Moved by an offset on their own
+            // page, they left it, and the text vanished past its edge.
+            let targets: Vec<ObjectTarget> = s.selected.iter().map(|o| o.target).collect();
+            let moved = s.selected.iter().fold(Rect::NOTHING, |r, o| r.union(screen(xf, info, page, o))).translate(gesture.now - gesture.start);
+            match move_to_page(doc, page, &targets, moved, (to_page, &txf)) {
+                Some(edit) => {
+                    view.pending_edit = Some(edit);
+                    s.clear();
+                }
+                None => s.notice = Some(tl!("These objects could not be moved. Select them again and try a smaller move.").into()),
             }
         } else if gesture.start.distance(gesture.now) > 3.0 && view.pending_edit.is_none() {
             let (a, b) = (xf.screen_to_view(gesture.start), xf.screen_to_view(gesture.now));
@@ -526,6 +606,24 @@ fn gesture_input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut Do
     };
     view.cursor.claim(Layer::Drag, icon);
     true
+}
+
+/// Thai edition: objects `targets` of `page` dropped on another page, their box on screen at
+/// `moved`: copied there, where they were dropped, and deleted here, as one step. Moved by an
+/// offset on their own page they left it, and the text vanished past its edge. `None` when they
+/// can't be copied (the document forbids it) or the place isn't a number.
+pub(crate) fn move_to_page(doc: &Document, page: usize, targets: &[ObjectTarget], moved: Rect, (to_page, txf): (usize, &PageXform)) -> Option<Edit> {
+    let clip = doc.copy_objects(page, targets).ok()?;
+    let to = crate::edit_text_ui::user_box(txf, &doc.info, to_page, moved);
+    let from = clip.rect();
+    let offset = [to[0] - from[0], to[3] - from[3]];
+    offset.iter().all(|v| v.is_finite()).then(|| Edit::Batch {
+        label: "Move object".into(),
+        edits: vec![
+            Edit::DeleteObjects { page, objects: targets.to_vec() },
+            Edit::PasteObjects { page: to_page, clip: std::sync::Arc::new(clip), offset },
+        ],
+    })
 }
 
 /// What of the objects lies under `p` on `page`: the objects selected together (a drag moves
@@ -698,18 +796,13 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, press: PagePress, vie
         Some(Owner::Objects { part: ObjectsPart::Toggle(target) }) => Some(target),
         _ => None,
     };
-    // A page-sized background image must not hide editable labels or added notes.
-    // Within each kind, prefer the last object as the ordinary single-item tools do.
-    // Nor is a scan under an OCR layer anything but the paper: a click on it is a click on the
-    // empty page (Thai edition).
+    // A scan under an OCR layer is nothing but the paper: a click on it is a click on the empty
+    // page (Thai edition).
     let paper = |o: &&EditableObject| {
         o.target.kind == ObjectKind::Image
             && crate::edit_text_ui::fills_page(xf, screen(xf, info, page, o))
             && doc.text_blocks(page).iter().any(|b| b.invisible)
     };
-    let hit = [ObjectKind::Added, ObjectKind::Text, ObjectKind::Image].into_iter().find_map(|kind| {
-        objects.iter().rev().find(|o| o.target.kind == kind && screen(xf, info, page, o).expand(2.0).contains(p)).filter(|o| !paper(o))
-    });
     if let Some(target) = toggled {
         s.took_press = Some(page);
         // The object the router found, unless it is the paper under an OCR layer.
@@ -731,8 +824,8 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, press: PagePress, vie
             // edition).
             s.gesture = Some(Gesture { start: p, now: p, marquee: false, additive: true, copy: Some((object.target, object.rect)) });
         } else if let Some(object) = hit {
-            if let Some(index) = s.selected.iter().position(|o| o.target == object.target) {
-                s.selected.remove(index);
+            if s.selected.iter().any(|o| o.target == object.target) {
+                s.remove_with_group(doc, page, object.target);
             } else if s.selected.len() < MAX_MOVE_OBJECTS {
                 s.selected.push(object.clone());
             } else {
@@ -766,11 +859,17 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, press: PagePress, vie
     s.clear();
     // One click selects a paragraph, which a drag or the arrow keys then move; a double click
     // (released over the selection, above) opens it for typing. Its edges stay the rewrap handles
-    // (Thai edition).
-    if let Some(object) = hit
-        && object.target.kind == ObjectKind::Text
+    // (Thai edition). The paragraph is the one the router found, not the first object under the
+    // point: added content lying under it (a cover box) is found first, and the click went on
+    // to open the paragraph.
+    let paragraph = match owner {
+        Some(Owner::Paragraph { block, part: ParagraphPart::Body }) => {
+            objects.iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block })
+        }
+        _ => None,
+    };
+    if let Some(object) = paragraph
         && !resp.double_clicked()
-        && matches!(owner, Some(Owner::Paragraph { part: ParagraphPart::Body, .. }))
     {
         leave_single(view);
         s.page = Some(page);
@@ -825,7 +924,8 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView
             Key::ArrowDown => egui::vec2(0.0, 1.0),
             _ => return false,
         };
-        step += direction * if modifiers.shift { 10.0 } else { 1.0 };
+        // Half a point a press (Thai edition: one point couldn't line things up), ten with Shift.
+        step += direction * if modifiers.shift { 10.0 } else { crate::content_ui::NUDGE };
         true
     });
     if step == egui::Vec2::ZERO {
@@ -998,140 +1098,54 @@ fn batch_delete(mut edits: Vec<Edit>) -> Option<Edit> {
 }
 
 /// Merge text boxes (Thai edition): the text boxes and paragraphs selected together, two or more
-/// and only text, become one added text box where they were: their text in reading order (a
-/// line's pieces left to right, a space between pieces apart, the lines top to bottom), in the
-/// look of the first, over the box they cover. One undo step. The edit, and the page and index
-/// the new box will have among the page's added items, to select it.
-pub(crate) fn merge_edit(view: &DocView, doc: &Document) -> Option<(Edit, usize, usize)> {
+/// and only text, become one group, handled together (a click on one selects them all), each
+/// keeping its own text, look and place: added boxes become text of the page where they are, and
+/// nothing is laid out again. Rewritten into one box, rows wrapped, lost their indent, came out in
+/// one size and reached over the next paragraph. One undo step. The edit, the page, and a
+/// paragraph of the group to select afterwards (none when every piece was an added box).
+pub(crate) fn merge_edit(view: &DocView, doc: &Document) -> Option<(Edit, usize, Option<usize>)> {
     let (page, objects) = view.objects.selection()?;
     if objects.len() < 2 {
         return None;
     }
-    let xf = view.page_xform(page)?;
-    let info = &doc.info;
     let added: Vec<&pdfcraft_engine::Added> = doc.added().iter().filter(|a| a.page == page).collect();
-    let blocks = doc.text_blocks(page);
-    let mut pieces: Vec<pdfcraft_engine::AddedText> = Vec::with_capacity(objects.len());
-    // Thai edition: each piece's parts by colour and size, as characters of its own text.
-    let mut piece_runs: Vec<Vec<pdfcraft_engine::TextRun>> = Vec::with_capacity(objects.len());
-    let lines_on_page = doc.text_lines(page);
+    let mut blocks = Vec::new();
+    let mut boxes = Vec::new();
     for o in objects {
-        let text = match o.target.kind {
-            ObjectKind::Text => crate::edit_text_ui::paragraph_as_added(&xf, info, page, blocks.get(o.target.index)?)?,
+        match o.target.kind {
+            ObjectKind::Text => blocks.push(o.target.index),
             ObjectKind::Added => match &added.get(o.target.index)?.content {
-                pdfcraft_engine::AddedContent::Text(t) => t.clone(),
+                pdfcraft_engine::AddedContent::Text(_) => boxes.push(o.target.index),
                 pdfcraft_engine::AddedContent::Image(_) => return None,
             },
             ObjectKind::Image => return None,
-        };
-        if !text.rect.iter().all(|v| v.is_finite()) {
-            return None;
         }
-        let own = match o.target.kind {
-            ObjectKind::Text => blocks.get(o.target.index).map_or(Vec::new(), |b| crate::edit_text_ui::paragraph_runs(b, &lines_on_page)),
-            _ => Vec::new(),
-        };
-        let own = if own.is_empty() {
-            vec![pdfcraft_engine::TextRun {
-                chars: 0..text.text.chars().count(),
-                color: text.color,
-                size: text.size,
-                bold: text.bold,
-                italic: text.italic,
-                underline: text.underline,
-            }]
-        } else {
-            own
-        };
-        piece_runs.push(own);
-        pieces.push(text);
     }
-    let (merged, runs) = merged_text_runs(pieces, piece_runs)?;
-    let width = f64::from(info.pages.get(page)?.width);
-    let deleted_added = objects.iter().filter(|o| o.target.kind == ObjectKind::Added).count();
-    let index = added.len().checked_sub(deleted_added)?;
-    // The page's own paragraphs go by their lines (Thai edition; see [`delete_edits_in`]).
-    let mut edits = delete_edits_in(doc, page, objects.iter().map(|o| o.target).collect());
-    let merged = pdfcraft_engine::fitted_text(&merged, width);
-    // Pieces of several colours or sizes stay so (Thai edition): the merged box is text of the page.
-    let mixed = runs.windows(2).any(|w| !w[0].same_look(&w[1]));
-    edits.push(if mixed { Edit::AddStyledText { page, text: merged, runs } } else { Edit::AddText { page, text: merged } });
-    Some((Edit::Batch { label: "Merge text boxes".into(), edits }, page, index))
+    // Already one group, all of it: nothing to merge (Ungroup is offered instead).
+    if boxes.is_empty() && one_group(doc, page, &blocks).is_some() {
+        return None;
+    }
+    // A paragraph to select afterwards: the first of them, or the one an added box draws (its
+    // paragraph keeps its number when the box becomes text of the page).
+    let all = doc.text_blocks(page);
+    let drawn_by = |index: usize| {
+        let pdfcraft_engine::AddedContent::Text(t) = &added.get(index)?.content else { return None };
+        let middle = [(t.rect[0] + t.rect[2]) / 2.0, (t.rect[1] + t.rect[3]) / 2.0];
+        all.iter().position(|b| {
+            b.text.contains(t.text.trim()) && b.rect[0] <= middle[0] && middle[0] <= b.rect[2] && b.rect[1] <= middle[1] && middle[1] <= b.rect[3]
+        })
+    };
+    let first = blocks.iter().min().copied().or_else(|| boxes.iter().find_map(|i| drawn_by(*i)));
+    Some((Edit::GroupText { page, blocks, added: boxes, group: true }, page, first))
 }
 
-/// [`merged_text`] with each piece's parts (`runs`, characters of its own text) placed in the
-/// merged text (Thai edition).
-fn merged_text_runs(
-    pieces: Vec<pdfcraft_engine::AddedText>,
-    runs: Vec<Vec<pdfcraft_engine::TextRun>>,
-) -> Option<(pdfcraft_engine::AddedText, Vec<pdfcraft_engine::TextRun>)> {
-    let merged = merged_text(pieces.clone())?;
-    // Find each piece in the merged text, in the order it was written there.
-    let mid = |t: &pdfcraft_engine::AddedText| (t.rect[1] + t.rect[3]) / 2.0;
-    let mut order: Vec<(pdfcraft_engine::AddedText, Vec<pdfcraft_engine::TextRun>)> = pieces.into_iter().zip(runs).collect();
-    order.sort_by(|(a, _), (b, _)| mid(b).total_cmp(&mid(a)).then(a.rect[0].total_cmp(&b.rect[0])));
-    let mut out = Vec::new();
-    let mut from = 0usize;
-    for (piece, piece_runs) in &order {
-        let piece = piece.text.trim_end_matches('\n');
-        let Some(at) = merged.text.get(from..).and_then(|rest| rest.find(piece)).map(|k| k + from) else { continue };
-        let start = merged.text.get(..at).map_or(0, |s| s.chars().count());
-        for r in piece_runs {
-            out.push(pdfcraft_engine::TextRun { chars: start + r.chars.start..start + r.chars.end, ..r.clone() });
-        }
-        from = at + piece.len();
-    }
-    out.sort_by_key(|r| r.chars.start);
-    Some((merged, out))
-}
-
-/// Text boxes (display space, y up) as one: lines of the pieces whose middles are level, top to
-/// bottom; in a line, left to right, with a space between pieces set apart. The first piece's
-/// look, the box around them all.
-fn merged_text(mut pieces: Vec<pdfcraft_engine::AddedText>) -> Option<pdfcraft_engine::AddedText> {
-    let mid = |t: &pdfcraft_engine::AddedText| (t.rect[1] + t.rect[3]) / 2.0;
-    pieces.sort_by(|a, b| mid(b).total_cmp(&mid(a)).then(a.rect[0].total_cmp(&b.rect[0])));
-    let mut lines: Vec<Vec<pdfcraft_engine::AddedText>> = Vec::new();
-    for p in pieces {
-        // On one row: middles level, or the boxes overlapping by half the lower one's height
-        // (Thai edition: boxes of one row set a little higher or lower kept their own rows, and
-        // the merged text came out of order).
-        let level = |l: &Vec<pdfcraft_engine::AddedText>| {
-            l.iter().any(|f| {
-                let overlap = f.rect[3].min(p.rect[3]) - f.rect[1].max(p.rect[1]);
-                let lower = (f.rect[3] - f.rect[1]).min(p.rect[3] - p.rect[1]);
-                (mid(f) - mid(&p)).abs() <= f.size.min(p.size).max(1.0) * 0.5 || (lower > 0.0 && overlap >= lower * 0.5)
-            })
-        };
-        match lines.last_mut() {
-            Some(line) if level(line) => line.push(p),
-            _ => lines.push(vec![p]),
-        }
-    }
-    let mut text = String::new();
-    for (i, line) in lines.iter_mut().enumerate() {
-        line.sort_by(|a, b| a.rect[0].total_cmp(&b.rect[0]));
-        if i > 0 {
-            text.push('\n');
-        }
-        let mut right: Option<f64> = None;
-        for p in line.iter() {
-            if let Some(r) = right
-                && p.rect[0] - r > p.size.max(1.0) * 0.15
-                && !text.ends_with(char::is_whitespace)
-            {
-                text.push(' ');
-            }
-            text.push_str(p.text.trim_end_matches('\n'));
-            right = Some(right.map_or(p.rect[2], |r| r.max(p.rect[2])));
-        }
-    }
-    let all = lines.iter().flatten();
-    let rect = all.fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |r, p| {
-        [r[0].min(p.rect[0]), r[1].min(p.rect[1]), r[2].max(p.rect[2]), r[3].max(p.rect[3])]
-    });
-    let first = lines.first()?.first()?.clone();
-    (rect.iter().all(|v| v.is_finite()) && !text.trim().is_empty()).then_some(pdfcraft_engine::AddedText { text, rect, ..first })
+/// The group (Thai edition) paragraphs `blocks` of `page` make up, when they are all of one group
+/// and the whole of it.
+fn one_group(doc: &Document, page: usize, blocks: &[usize]) -> Option<u32> {
+    let all = doc.text_blocks(page);
+    let g = all.get(*blocks.first()?)?.group?;
+    let members = all.iter().filter(|b| b.group == Some(g)).count();
+    (blocks.iter().all(|i| all.get(*i).is_some_and(|b| b.group == Some(g))) && members == blocks.len()).then_some(g)
 }
 
 /// Split into lines (Thai edition): the one text box or paragraph selected, of two lines or more,
@@ -1155,18 +1169,26 @@ pub(crate) fn split_edit(view: &DocView, doc: &Document, at_spaces: bool) -> Opt
         })?;
     let xf = view.page_xform(page)?;
     let info = &doc.info;
-    let mut boxes: Vec<pdfcraft_engine::AddedText> = Vec::new();
+    // Each box, and where its text starts among the paragraph's characters (for its parts' looks).
+    let mut boxes: Vec<(pdfcraft_engine::AddedText, usize)> = Vec::new();
+    // The paragraph's parts by look (Thai edition): each piece keeps its own colour, size,
+    // weight, slant and underline. Every piece took the look of the paragraph's first part.
+    let mut runs: Vec<pdfcraft_engine::TextRun> = Vec::new();
     match target.kind {
         ObjectKind::Text => {
             let block = doc.text_blocks(page).get(target.index)?.clone();
             let lines = doc.text_lines(page);
+            runs = crate::edit_text_ui::paragraph_runs(&block, &lines);
             let texts: Vec<&str> = block.editor_text.split('\n').collect();
             // Split at spaces splits a paragraph of one row too.
             let least = if at_spaces { 1 } else { 2 };
             if block.rows.len() < least || texts.len() != block.rows.len() {
                 return None;
             }
+            let mut start = 0usize;
             for (row, text) in block.rows.iter().zip(texts) {
+                let at = start;
+                start += text.chars().count() + 1;
                 if text.trim().is_empty() {
                     continue;
                 }
@@ -1176,7 +1198,7 @@ pub(crate) fn split_edit(view: &DocView, doc: &Document, at_spaces: bool) -> Opt
                     .map(|l| l.rect)
                     .reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])])?;
                 let one = pdfcraft_engine::TextBlock { rect, editor_text: text.to_string(), text: text.to_string(), ..block.clone() };
-                boxes.push(crate::edit_text_ui::paragraph_as_added(&xf, info, page, &one)?);
+                boxes.push((crate::edit_text_ui::paragraph_as_added(&xf, info, page, &one)?, at));
             }
         }
         ObjectKind::Added => {
@@ -1192,7 +1214,7 @@ pub(crate) fn split_edit(view: &DocView, doc: &Document, at_spaces: bool) -> Opt
                     continue;
                 }
                 let top = t.rect[3] - row_h * i as f64;
-                boxes.push(pdfcraft_engine::AddedText { text: (*row).to_string(), rect: [t.rect[0], top - row_h, t.rect[2], top], ..t.clone() });
+                boxes.push((pdfcraft_engine::AddedText { text: (*row).to_string(), rect: [t.rect[0], top - row_h, t.rect[2], top], ..t.clone() }, 0));
             }
         }
         ObjectKind::Image => return None,
@@ -1202,31 +1224,62 @@ pub(crate) fn split_edit(view: &DocView, doc: &Document, at_spaces: bool) -> Opt
         // Each line's words, where the line draws them; a line of one word stays whole.
         boxes = boxes
             .into_iter()
-            .flat_map(|b| {
+            .flat_map(|(b, at)| {
                 let line = pdfcraft_engine::fitted_text(&b, width);
-                let words: Vec<pdfcraft_engine::AddedText> = pdfcraft_engine::split_text(&line, true).into_iter().map(|(w, _)| w).collect();
-                if words.is_empty() { vec![b] } else { words }
+                let words: Vec<(pdfcraft_engine::AddedText, usize)> = pdfcraft_engine::split_text(&line, true)
+                    .into_iter()
+                    .map(|(w, range)| {
+                        let skipped = line.text.get(..range.start).map_or(0, |s| s.chars().count());
+                        (w, at + skipped)
+                    })
+                    .collect();
+                if words.is_empty() { vec![(b, at)] } else { words }
             })
             .collect();
     }
-    if boxes.len() < 2 || boxes.iter().any(|b| !b.rect.iter().all(|v| v.is_finite())) {
+    if boxes.len() < 2 || boxes.iter().any(|(b, _)| !b.rect.iter().all(|v| v.is_finite())) {
         return None;
     }
+    let sizes_vary = runs.windows(2).any(|w| w[0].size != w[1].size);
     let mut edits = delete_edits(page, vec![target]);
     let mut expected = Vec::with_capacity(boxes.len());
-    for b in boxes {
-        let b = pdfcraft_engine::fitted_text(&b, width);
+    for (b, at) in boxes {
+        let mut b = pdfcraft_engine::fitted_text(&b, width);
+        let own = piece_runs(&runs, at..at + b.text.chars().count());
+        // One look: the box is given it. Several: its parts keep theirs, as text of the page.
+        let styled = match own.as_slice() {
+            [] => false,
+            [first, rest @ ..] if rest.iter().all(|r| r.same_look(first)) => {
+                (b.color, b.bold, b.italic, b.underline) = (first.color, first.bold, first.italic, first.underline);
+                if sizes_vary {
+                    b.size = first.size;
+                }
+                false
+            }
+            _ => true,
+        };
         // Display space is user space flipped on an upright page; near enough to find each again.
         expected.push(EditableObject {
-            target: ObjectTarget { kind: ObjectKind::Added, index: 0 },
+            target: ObjectTarget { kind: if styled { ObjectKind::Text } else { ObjectKind::Added }, index: 0 },
             rect: [b.rect[0], b.rect[1], b.rect[2], b.rect[3]],
             content_type: "text",
             text: Some(b.text.clone()),
         });
-        edits.push(Edit::AddText { page, text: b });
+        edits.push(if styled { Edit::AddStyledText { page, text: b, runs: own } } else { Edit::AddText { page, text: b } });
     }
     let label = if at_spaces { "Split at spaces" } else { "Split into lines" };
     Some((Edit::Batch { label: label.into(), edits }, page, expected))
+}
+
+/// The parts of `runs` (characters of a paragraph) within `chars`, counted from its start (Thai
+/// edition): the looks a piece split from the paragraph keeps.
+fn piece_runs(runs: &[pdfcraft_engine::TextRun], chars: std::ops::Range<usize>) -> Vec<pdfcraft_engine::TextRun> {
+    runs.iter()
+        .filter_map(|r| {
+            let (a, b) = (r.chars.start.max(chars.start), r.chars.end.min(chars.end));
+            (a < b).then(|| pdfcraft_engine::TextRun { chars: a - chars.start..b - chars.start, ..r.clone() })
+        })
+        .collect()
 }
 
 /// Split into lines and Split at spaces in the page's right-click menu, for the one text box or
@@ -1259,12 +1312,25 @@ pub(crate) fn selection_menu(ui: &mut egui::Ui, view: &mut DocView, doc: &Docume
     if view.line_editor.is_some() || view.objects.count() < 2 {
         return false;
     }
-    if let Some((edit, page, index)) = merge_edit(view, doc)
+    if let Some((edit, page, first)) = merge_edit(view, doc)
         && ui.add_enabled(allowed, egui::Button::new(tl!("Merge text boxes"))).clicked()
     {
         view.pending_edit = Some(edit);
-        view.content.select_added = Some((page, index));
+        // The group selected afterwards: one of its paragraphs brings the rest.
+        if let Some(block) = first {
+            view.objects.select_paragraph_next(page, block);
+        }
         ui.close();
+    }
+    // A merged group selected whole: Ungroup text boxes (Thai edition), each as it was.
+    if let Some((page, objects)) = view.objects.selection()
+        && objects.iter().all(|o| o.target.kind == ObjectKind::Text)
+    {
+        let blocks: Vec<usize> = objects.iter().map(|o| o.target.index).collect();
+        if one_group(doc, page, &blocks).is_some() && ui.add_enabled(allowed, egui::Button::new(tl!("Ungroup text boxes"))).clicked() {
+            view.pending_edit = Some(Edit::GroupText { page, blocks: blocks.clone(), added: Vec::new(), group: false });
+            ui.close();
+        }
     }
     let delete = egui::Button::new(tl!("Delete")).shortcut_text(crate::i18n::key_name("Delete"));
     if ui.add_enabled(allowed, delete).clicked()
@@ -1284,13 +1350,30 @@ pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, info: 
     // A Ctrl+drag leaves the selection in place; the copy it drops is drawn below.
     let delta = selection.gesture.filter(|g| !g.marquee && g.copy.is_none()).map_or(egui::Vec2::ZERO, |g| g.now - g.start);
     let mut union = Rect::NOTHING;
+    // A paragraph of a merged group (Thai edition) is drawn faintly inside its group's frame.
+    let grouped = |t: &ObjectTarget| selection.groups.iter().any(|g| g.len() > 1 && g.contains(t));
     for object in &selection.selected {
         let rect = screen(xf, info, page, object).translate(delta);
         painter.rect_filled(rect, 0.0, BLUE.gamma_multiply(0.05));
-        painter.rect_stroke(rect, 0.0, Stroke::new(1.5, BLUE), egui::StrokeKind::Outside);
+        // A paragraph of a merged group shows only inside its group's one frame (Thai edition).
+        if !grouped(&object.target) {
+            painter.rect_stroke(rect, 0.0, Stroke::new(1.5, BLUE), egui::StrokeKind::Outside);
+        }
         union = union.union(rect);
     }
-    if selection.selected.len() > 1 {
+    let mut whole_group = false;
+    for members in selection.groups.iter().filter(|g| g.len() > 1) {
+        let frame = selection
+            .selected
+            .iter()
+            .filter(|o| members.contains(&o.target))
+            .fold(Rect::NOTHING, |r, o| r.union(screen(xf, info, page, o).translate(delta)));
+        if frame.is_positive() {
+            painter.rect_stroke(frame.expand(3.0), 0.0, Stroke::new(2.0, BLUE), egui::StrokeKind::Outside);
+            whole_group |= members.len() == selection.selected.len();
+        }
+    }
+    if selection.selected.len() > 1 && !whole_group {
         painter.rect_stroke(union.expand(4.0), 0.0, Stroke::new(1.0, BLUE.gamma_multiply(0.7)), egui::StrokeKind::Outside);
     }
     if selection.gesture.is_some_and(|g| !g.marquee && g.copy.is_none() && g.start.distance(g.now) > DRAG_SLOP) && union.is_positive() {
@@ -1415,44 +1498,6 @@ startxref
         assert!(!left.iter().any(|t| t.contains("Nationality") || t.contains("House")), "the row is gone: {left:?}");
     }
 
-    /// Thai edition: merged boxes keep their colours: each piece's parts land where the piece is
-    /// in the merged text.
-    #[test]
-    fn merged_boxes_keep_each_pieces_colour() {
-        let b = |text: &str, rect: [f64; 4], color: [f64; 3]| pdfcraft_engine::AddedText {
-            text: text.into(),
-            rect,
-            size: 12.0,
-            color,
-            ..Default::default()
-        };
-        let run = |n: usize, color: [f64; 3]| vec![pdfcraft_engine::TextRun { chars: 0..n, color, size: 12.0, ..Default::default() }];
-        let (red, blue) = ([1.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
-        let pieces = vec![b("Soft", [100.0, 500.0, 140.0, 514.0], red), b("ware", [42.0, 500.0, 90.0, 514.0], blue)];
-        let (merged, runs) = merged_text_runs(pieces, vec![run(4, red), run(4, blue)]).unwrap();
-        assert_eq!(merged.text, "ware Soft");
-        let parts: Vec<_> = runs.iter().map(|r| (r.chars.clone(), r.color)).collect();
-        assert_eq!(parts, vec![(0..4, blue), (5..9, red)]);
-    }
-
-    /// Thai edition: boxes of one row merge left to right even when one sits a little higher (a
-    /// taller box beside shorter ones), rows top to bottom.
-    #[test]
-    fn merged_boxes_read_left_to_right_on_a_row() {
-        let b = |text: &str, rect: [f64; 4]| pdfcraft_engine::AddedText { text: text.into(), rect, size: 12.0, ..Default::default() };
-        let pieces = vec![
-            b("three", [300.0, 500.0, 360.0, 516.0]),
-            b("one", [40.0, 496.0, 100.0, 534.0]),
-            b("two", [150.0, 502.0, 220.0, 514.0]),
-            b("below", [40.0, 470.0, 100.0, 486.0]),
-        ];
-        let merged = merged_text(pieces).expect("merged");
-        assert_eq!(
-            merged.text,
-            "one two three
-below"
-        );
-    }
     use super::*;
 
     fn t(kind: ObjectKind, index: usize) -> ObjectTarget {

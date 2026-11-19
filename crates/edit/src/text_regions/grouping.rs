@@ -3,7 +3,10 @@ use super::{BlockStyle, HashMap, Matrix, TextBlock, TextLine, paragraph_separato
 fn same_plane(a: &TextLine, b: &TextLine) -> bool {
     let at = Matrix(a.origin.tm).then(&Matrix(a.origin.ctm));
     let bt = Matrix(b.origin.tm).then(&Matrix(b.origin.ctm));
-    a.scope == b.scope
+    // Boxes merged (Thai edition) are one plane whatever paragraph tags they were drawn under.
+    (a.scope == b.scope || a.group.is_some() && a.group == b.group)
+        && a.group == b.group
+        && a.boxed == b.boxed
         && a.paint == b.paint
         && [0, 2].iter().all(|axis| {
             let ax = at.0.get(*axis).copied().unwrap_or(0.0);
@@ -112,7 +115,31 @@ pub(crate) fn is_centred(block: &TextBlock, lines: &[TextLine], page_centre: f64
 }
 
 pub(crate) fn group_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
-    group_layout(lines, true)
+    let mut blocks = group_layout(lines, true);
+    set_frames(&mut blocks, lines);
+    blocks
+}
+
+/// Each paragraph's box of its own (Thai edition: [`TextBlock::frame`]), from the size its first
+/// boxed line was given, at its text's left and top, and never smaller than its text.
+fn set_frames(blocks: &mut [TextBlock], lines: &[TextLine]) {
+    for b in blocks {
+        let Some([w, h, a, x]) = b.lines.iter().filter_map(|i| lines.get(*i)).find_map(|l| l.boxed) else { continue };
+        let r = b.rect;
+        // Placed as its text is aligned in it: from the text's left, round its middle, or back
+        // from its right.
+        let left = if a >= 1.5 {
+            r[2] - w
+        } else if a >= 0.5 {
+            (r[0] + r[2]) / 2.0 - w / 2.0
+        } else {
+            r[0] - x
+        };
+        let frame = [left.min(r[0]), r[1].min(r[3] - h), (left + w).max(r[2]), r[3]];
+        if frame.iter().all(|v| v.is_finite()) {
+            b.frame = Some(frame);
+        }
+    }
 }
 
 /// Exporters currently represent a block with one style. Keep their style boundaries until
@@ -148,6 +175,7 @@ pub(crate) fn group_reading_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
         offset += row.len();
     }
     blocks.extend(group_layout(lines.get(start..).unwrap_or_default(), false));
+    set_frames(&mut blocks, lines);
     blocks
 }
 
@@ -266,6 +294,9 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                     // One marked-content scope is one paragraph's (Thai edition): a part a rewrite
                     // drew in its own text object, touching the rest, stays with it.
                     || prev.scope.is_some() && prev.scope == line.scope
+                    // Boxes merged (Thai edition) on one row are one box: "ขอ" and "ทดแทน" touching
+                    // read "ขอทดแทน", words apart keep the space between them (below).
+                    || prev.group.is_some() && prev.group == line.group
                     || gap > prev.size.min(line.size) * 0.01
                     || !same_style(prev, line)
                     || prev.text.ends_with(char::is_whitespace)
@@ -349,6 +380,9 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                 .map_or_else(|| following.map_or(tol * 2.05, |lead| (lead * 1.35).min(tol * 2.05)), |lead| lead * 1.5);
             // OCR lines stay apart: the scan fixes where each one is, so they never rewrap together.
             (!mixed || !(invisible(prev) || invisible(first)))
+                // Rows of a merged group stay paragraphs of their own (Thai edition): the group
+                // only handles them together. Joined, a restyle laid the rows out again.
+                && prev.group.is_none()
                 && (mixed || same_style(prev, first))
                 && same_plane(prev, first)
                 // The rewrite sets every row in the first one's horizontal scale.
@@ -376,6 +410,8 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                 invisible: true,
                 underlined: false,
                 underlined_parts: Vec::new(),
+                group: first.group,
+                frame: None,
             });
         }
         let Some(block) = blocks.last_mut() else { continue };

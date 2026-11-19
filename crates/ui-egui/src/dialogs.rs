@@ -1607,39 +1607,175 @@ fn offer_editing_tips(app: &mut PdfCraftApp, ctx: &egui::Context) {
     app.dialog = Some(Dialog::EditingTips);
 }
 
-/// Thai edition: `Dialog::EditingTips` content, the two tools for text with their keys read from
-/// the command registry (so a rebinding shows). Returns whether it was dismissed.
+/// The MaewPDF orange (the app icon's tile, `crate::THAI_EDITION_TILE`) the tips are drawn in.
+const TIPS_AMBER: egui::Color32 = egui::Color32::from_rgb(0xFF, 0x9F, 0x1C);
+
+/// One tip: its icon, its name, one short line, and the keys or gesture for it (empty: none).
+struct Tip {
+    icon: &'static str,
+    name: String,
+    what: String,
+    keys: String,
+}
+
+/// The tips of tab `tab` (0 editing text, 1 layout, 2 scans and OCR, 3 general). Command names
+/// and keys are read from the command registry, so a renamed command or a rebinding shows.
+fn tips(ctx: &egui::Context, tab: usize) -> Vec<Tip> {
+    let command = |id: &str| pdfcraft_engine::commands::command(id).map(|c| tl!(c.label).trim_end_matches('…').to_string()).unwrap_or_default();
+    let keys = |id: &str| crate::commands::command_shortcut_label(ctx, id);
+    let ctrl = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl" };
+    let tip = |icon, name: String, what: &str, keys: String| Tip { icon, name, what: what.to_string(), keys };
+    match tab {
+        0 => vec![
+            tip("text-cursor-input", command("edit.edit_text"), tl!("Click to select, double-click to type."), keys("edit.edit_text")),
+            tip("type", command("edit.text"), tl!("Click where it goes, then type."), keys("edit.text")),
+            tip("move", tl!("Nudge").into(), tl!("Arrow keys move 1 pt, with Shift 10 pt."), "← ↑ → ↓".into()),
+            tip("copy", tl!("Drag a copy").into(), tl!("Hold the key and drag a box or picture."), format!("{ctrl} + {}", tl!("drag"))),
+            tip("brush", tl!("Format painter").into(), tl!("Give another box this box's font, size and colour."), String::new()),
+        ],
+        1 => vec![
+            tip(
+                "ruler",
+                tl!("Rulers").into(),
+                &crate::i18n::fmt(tl!("Turn them on at {menu} › {item}."), &[("menu", tl!("View")), ("item", tl!("Rulers"))]),
+                String::new(),
+            ),
+            tip("arrow-up-down", tl!("Guides").into(), tl!("Drag one out of a ruler; drag it back to remove it."), String::new()),
+            tip("paint-bucket", tl!("Cover the background").into(), tl!("Cover old text; the dropper picks the paper's colour."), String::new()),
+            tip("layers", tl!("Arrange").into(), &crate::i18n::fmt(tl!("Right-click a box › {item}."), &[("item", tl!("Arrange"))]), String::new()),
+        ],
+        2 => vec![
+            tip("scan-text", command("ocr.recognize"), tl!("Makes a scan searchable and copyable. Choose Thai first."), String::new()),
+            tip("sparkles", command("ocr.enhance"), tl!("Turns a grey or yellowed page white and darkens faint letters."), String::new()),
+            tip(
+                "brush-cleaning",
+                tl!("Shadows and specks").into(),
+                &crate::i18n::fmt(
+                    tl!("In the same window: {shadow} and {specks}."),
+                    &[("shadow", tl!("Edge shadow removal")), ("specks", tl!("Despeckle"))],
+                ),
+                String::new(),
+            ),
+            tip(
+                "camera",
+                command("ocr.enhance_camera"),
+                &crate::i18n::fmt(tl!("Drag the four corners onto the paper's edges, then {button}."), &[("button", tl!("Enhance page"))]),
+                String::new(),
+            ),
+            tip("text-select", command("ocr.correct"), tl!("Go through the words it wasn't sure of, one by one."), String::new()),
+        ],
+        _ => vec![
+            tip("moon", tl!("Light or dark").into(), tl!("Click the theme button at the top right."), String::new()),
+            tip("zoom-in", tl!("Zoom").into(), tl!("Hold the key and roll the mouse wheel."), format!("{ctrl} + {}", tl!("wheel"))),
+            tip(
+                "hand",
+                tl!("Move around the page").into(),
+                tl!("Hold Space and drag, or drag with the middle mouse button."),
+                format!("{} + {}", tl!("Space"), tl!("drag")),
+            ),
+        ],
+    }
+}
+
+/// Thai edition: `Dialog::EditingTips` content: short tips in four tabs (editing text, layout,
+/// scans and OCR, general), each an icon, a name, one line and its keys, in MaewPDF's orange. Returns whether it
+/// was dismissed.
 fn editing_tips_body(ui: &mut egui::Ui) -> bool {
     let t = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new(tl!("Tips for editing text")).font(theme::semibold(18.0)));
-    ui.add_space(10.0);
-    let tips = [
-        ("edit.edit_text", tl!("Change the text and pictures already on the page: click a paragraph to select it, double-click it to type.")),
-        ("edit.text", tl!("Add a new text box: click where it should go and start typing.")),
-    ];
-    egui::Grid::new("editing_tips").num_columns(2).spacing([16.0, 12.0]).show(ui, |ui| {
-        for (id, what) in tips {
-            let key = crate::commands::command_shortcut_label(ui.ctx(), id);
-            ui.label(egui::RichText::new(key).font(egui::FontId::monospace(14.0)).strong());
-            ui.vertical(|ui| {
-                let name = pdfcraft_engine::commands::command(id).map(|c| tl!(c.label)).unwrap_or_default();
-                ui.label(egui::RichText::new(name).font(theme::semibold(14.0)));
-                ui.add(egui::Label::new(what).wrap());
-            });
-            ui.end_row();
+    let dark = t.kind == theme::ThemeKind::Dark;
+    // Orange text and icons readable on the card: the bright orange on dark, a deeper one on light.
+    let ink = if dark { TIPS_AMBER } else { egui::Color32::from_rgb(0xC2, 0x41, 0x0C) };
+    let soft = if dark { egui::Color32::from_rgba_unmultiplied(0xFF, 0x9F, 0x1C, 38) } else { egui::Color32::from_rgb(0xFF, 0xF0, 0xD9) };
+    ui.set_min_width(480.0);
+    ui.label(egui::RichText::new(tl!("Tips for using MaewPDF")).font(theme::semibold(18.0)));
+    ui.add_space(12.0);
+    // The tabs: pills, the open one in orange.
+    let tab_id = egui::Id::unique("editing-tips-tab");
+    let mut tab = ui.ctx().data(|d| d.get_temp::<usize>(tab_id)).unwrap_or(0).min(3);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        for (i, name) in [tl!("Editing text"), tl!("Layout"), tl!("Scans & OCR"), tl!("General")].into_iter().enumerate() {
+            if amber_pill(ui, name, i == tab).clicked() {
+                tab = i;
+            }
         }
     });
-    ui.add_space(12.0);
+    ui.ctx().data_mut(|d| d.insert_temp(tab_id, tab));
+    ui.add_space(14.0);
+    // The tips keep the height of the longest tab seen, so the card doesn't shrink and move its
+    // tabs from under the pointer when a shorter tab opens.
+    let tallest_id = tab_id.with("tallest");
+    let tallest = ui.ctx().data(|d| d.get_temp::<f32>(tallest_id)).unwrap_or(0.0);
+    let list = ui.vertical(|ui| {
+        ui.set_min_height(tallest);
+        editing_tips_list(ui, &t, tab, ink, soft);
+    });
+    let height = list.response.rect.height();
+    if height.is_finite() && height > tallest {
+        ui.ctx().data_mut(|d| d.insert_temp(tallest_id, height));
+    }
+    ui.add_space(4.0);
     let again = crate::i18n::fmt(tl!("You can open these tips again from {menu} › {item}."), &[("menu", tl!("Help")), ("item", tl!("Editing tips"))]);
     ui.add(egui::Label::new(egui::RichText::new(again).color(t.text_muted)).wrap());
     ui.add_space(16.0);
     let mut done = false;
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            done = widgets::pill_button(ui, tl!("Got it"), true).clicked();
+            done = amber_pill(ui, tl!("Got it"), true).clicked();
         });
     });
     done
+}
+
+/// The tips of tab `tab`, one row each: an icon on a soft orange tile, the name with its keys,
+/// and one muted line.
+fn editing_tips_list(ui: &mut egui::Ui, t: &Tokens, tab: usize, ink: egui::Color32, soft: egui::Color32) {
+    for tip in tips(ui.ctx(), tab) {
+        ui.horizontal(|ui| {
+            let (tile, _) = ui.allocate_exact_size(egui::vec2(36.0, 36.0), egui::Sense::hover());
+            ui.painter().rect_filled(tile, 9.0, soft);
+            crate::widgets::icons::paint(ui, tile, tip.icon, 20.0, ink);
+            ui.add_space(6.0);
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(&tip.name).font(theme::semibold(14.0)).color(t.text));
+                    if !tip.keys.is_empty() {
+                        ui.add_space(4.0);
+                        egui::Frame::NONE
+                            .stroke(egui::Stroke::new(1.0, t.border))
+                            .corner_radius(egui::CornerRadius::same(6))
+                            .inner_margin(egui::Margin::symmetric(6, 1))
+                            .show(ui, |ui| {
+                                ui.label(egui::RichText::new(&tip.keys).font(egui::FontId::monospace(12.0)).color(ink));
+                            });
+                    }
+                });
+                ui.add(egui::Label::new(egui::RichText::new(&tip.what).color(t.text_muted)).wrap());
+            });
+        });
+        ui.add_space(10.0);
+    }
+}
+
+/// A pill button of the tips (Thai edition): orange with dark lettering when `on` (the open tab,
+/// the button that closes them), else outlined. Drawn as [`widgets::pill_button`] is, which
+/// announces itself as a button.
+fn amber_pill(ui: &mut egui::Ui, label: &str, on: bool) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    let colour = if on { egui::Color32::from_rgb(0x1B, 0x1B, 0x1E) } else { t.text_muted };
+    let galley = crate::bidi::layout_ui(ui, label.to_owned(), theme::semibold(13.0), colour);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(galley.size().x + 28.0, 30.0), egui::Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, label));
+    let fill = match (on, resp.hovered()) {
+        (true, true) => TIPS_AMBER.lerp_to_gamma(egui::Color32::WHITE, 0.12),
+        (true, false) => TIPS_AMBER,
+        (false, true) => t.hover,
+        (false, false) => egui::Color32::TRANSPARENT,
+    };
+    let stroke = if on { egui::Stroke::NONE } else { egui::Stroke::new(1.0, t.border) };
+    ui.painter().rect(rect, egui::CornerRadius::same(15), fill, stroke, egui::StrokeKind::Inside);
+    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, colour);
+    theme::hand(resp)
 }
 
 /// `Dialog::Shortcuts` content. Returns `false` when it has its own buttons and no footer is wanted.

@@ -96,6 +96,9 @@ pub(crate) struct Outcome {
     pub script: Option<Script>,
     /// A colour swatch was clicked, even the one already shown (Thai edition).
     pub colour_picked: bool,
+    /// An alignment was clicked, even the one already shown (Thai edition): Align left on a row
+    /// with room left of it in its box takes it to the box's left edge.
+    pub align_picked: bool,
 }
 
 const LINE_SPACINGS: [f64; 7] = [1.0, 1.15, 1.2, 1.5, 2.0, 2.5, 3.0];
@@ -285,6 +288,7 @@ pub(crate) fn panel(
     // Size and colour | bullets, numbering and alignment.
     let mut size_committed = false;
     let mut colour_picked = false;
+    let mut align_picked = false;
     row(ui, |ui| {
         // Any size from 1 to 500 pt can be typed, with the usual ones in a list (Thai edition).
         size_committed = crate::content_ui::size_control(ui, &mut look.size, &mut hover.size, fonts.mixed_size);
@@ -323,6 +327,7 @@ pub(crate) fn panel(
                     (TextAlign::Justify, "align-justify", tl!("Justify")),
                 ] {
                     if icons::button(ui, icon, 30.0, shown == a, tip).clicked() {
+                        align_picked = true;
                         match &paragraphs {
                             Some(p) => p.choose(look, a),
                             None => {
@@ -482,6 +487,7 @@ pub(crate) fn panel(
 
     out.size_committed = size_committed;
     out.colour_picked = colour_picked;
+    out.align_picked = align_picked;
     out.changed = out.changed || size_committed || (look.clone(), extras.as_deref().copied()) != before;
     crate::content_ui::note_hover(ui.ctx(), Some(hover));
     ui.add_space(6.0);

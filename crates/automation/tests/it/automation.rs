@@ -11770,6 +11770,85 @@ fn hebrew_text_through_tools_saves_reopens_extracts_and_renders() {
     assert!(page_text(&mut a, reopened)[0].contains("מיכאל"));
 }
 
+/// Thai edition: object_group merges a paragraph and an added text box into one group, each where
+/// it was; object_list shows the group; ungroup and undo take it apart; it survives a save.
+#[test]
+fn text_objects_group_in_place_and_ungroup() {
+    let dir = workdir("object-group");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_text", json!({"doc":doc,"page":1,"text":"Added label","rect":[20,20,130,45]}));
+    let inventory = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    let objects: Vec<_> = inventory["objects"].as_array().unwrap().iter().map(|o| json!({"kind":o["kind"],"index":o["index"]})).collect();
+    assert_eq!(objects.len(), 2, "{inventory}");
+    assert!(a.call("object_group", &json!({"doc":doc,"page":1,"objects":[objects[0]]})).is_err(), "one is not a group");
+    let grouped = ok(&mut a, "object_group", json!({"doc":doc,"page":1,"generation":inventory["generation"],"objects":objects}));
+    assert_eq!(grouped["grouped"], 2);
+    let after = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    let rows = after["objects"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{after}");
+    assert!(rows.iter().all(|o| o["kind"] == "text" && o["group"].is_u64() && o["group"] == rows[0]["group"]), "{after}");
+    let rects = |v: &Value| {
+        let mut r: Vec<(String, Vec<i64>)> = v["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| {
+                (
+                    o["text"].as_str().unwrap_or("").to_owned(),
+                    o["rect"].as_array().unwrap().iter().map(|n| n.as_f64().unwrap().round() as i64).collect(),
+                )
+            })
+            .collect();
+        r.sort();
+        r
+    };
+    // The page's paragraph keeps its box; the added box's text now lists by its glyphs, inside
+    // the frame it had.
+    let (old, new) = (rects(&inventory), rects(&after));
+    for (t, r) in &new {
+        let was = &old.iter().find(|(o, _)| o == t).unwrap_or_else(|| panic!("{t}: {old:?}")).1;
+        if t == "Added label" {
+            assert!(r[0] >= was[0] - 1 && r[1] >= was[1] - 1 && r[2] <= was[2] + 1 && r[3] <= was[3] + 1, "{t}: {r:?} in {was:?}");
+        } else {
+            assert_eq!(r, was, "{t} where it was");
+        }
+    }
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"grouped.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"grouped.pdf"}))["doc"].as_u64().unwrap();
+    let again = ok(&mut a, "object_list", json!({"doc":reopened,"page":1}));
+    assert!(again["objects"].as_array().unwrap().iter().all(|o| o["group"] == rows[0]["group"]), "{again}");
+    let paragraphs: Vec<_> = rows.iter().map(|o| json!({"kind":"text","index":o["index"]})).collect();
+    ok(&mut a, "object_group", json!({"doc":doc,"page":1,"objects":paragraphs,"ungroup":true}));
+    let apart = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    assert!(apart["objects"].as_array().unwrap().iter().all(|o| o.get("group").is_none()), "{apart}");
+    assert_eq!(rects(&apart), new, "ungrouped, each as it was");
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1}))["objects"], inventory["objects"], "two undos: as before");
+}
+
+/// Thai edition: text_edit gives a paragraph's box a width and a height of its own, which
+/// object_list shows and which stays after its text is edited again.
+#[test]
+fn a_paragraphs_box_keeps_the_size_it_was_given() {
+    let dir = workdir("paragraph-box");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "object_list", json!({"doc":doc,"page":1}))["objects"][0].clone();
+    assert_eq!(before["kind"], "text", "{before}");
+    let rect = |o: &Value| o["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect::<Vec<_>>();
+    ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"width":250,"height":60}));
+    let boxed = ok(&mut a, "object_list", json!({"doc":doc,"page":1}))["objects"][0].clone();
+    let r = rect(&boxed);
+    assert!((r[2] - r[0] - 250.0).abs() < 1.0 && (r[3] - r[1] - 60.0).abs() < 1.0, "{boxed}");
+    ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"text":"Page one"}));
+    let again = ok(&mut a, "object_list", json!({"doc":doc,"page":1}))["objects"][0].clone();
+    let r2 = rect(&again);
+    assert!((r2[2] - r2[0] - 250.0).abs() < 1.0 && (r2[3] - r2[1] - 60.0).abs() < 1.0, "{again}");
+    assert!(rect(&before)[2] - rect(&before)[0] < 200.0, "{before}");
+}
+
 #[test]
 fn mixed_objects_move_through_tools_with_generation_and_one_undo() {
     let dir = workdir("mixed-object-move");

@@ -70,6 +70,8 @@ fn parse(doc: &Document, d: &Dict) -> Option<Content> {
                 // Items written before line spacing have the ordinary one.
                 line_spacing: d.get(b"LineSpacing").and_then(Object::as_f64).filter(|v| super::types::LINE_SPACING_RANGE.contains(v)).unwrap_or(0.0),
                 direction: d.name(b"Direction").map_or(super::types::TextDirection::Horizontal, super::types::TextDirection::from_name),
+                // Thai edition: a box stretched taller than its lines.
+                fixed_height: matches!(d.get(b"FixedHeight"), Some(Object::Bool(true))),
             };
             // An ink whose look isn't the stored colour (a file edited by hand) is none.
             t.drop_stale_ink();
@@ -294,6 +296,12 @@ fn find(doc: &Document, page: usize, index: usize) -> Result<Added, EditError> {
 /// Thai edition: make added text item `index` of `page` part of the page's own text, drawn exactly
 /// as it is: its stream loses the marks that made it an added item, so Edit text treats it as a
 /// paragraph of the page (a part of it can then take its own colour or size). Not for pictures.
+/// The stream added item `index` of `page` is drawn by (Thai edition: the paragraph a text box
+/// becomes when Merge text boxes makes it text of the page is the one drawn by that stream).
+pub(crate) fn added_stream(doc: &Document, page: usize, index: usize) -> Result<pdfcraft_cos::ObjRef, EditError> {
+    Ok(find(doc, page, index)?.obj)
+}
+
 pub fn release_content(doc: &mut Document, page: usize, index: usize) -> Result<(), EditError> {
     let a = find(doc, page, index)?;
     if !matches!(a.content, Content::Text(_)) {

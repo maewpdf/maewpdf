@@ -4978,6 +4978,7 @@ fn pasted_added_content_keeps_its_style_and_picture() {
         underline: true,
         line_spacing: 0.0,
         direction: pdfcraft_edit::TextDirection::Horizontal,
+        fixed_height: false,
     };
     s.apply(id, Edit::AddText { page: 0, text: text.clone() }).unwrap();
     let copied = s.get(id).unwrap().added()[0].content.clone();
@@ -10667,6 +10668,7 @@ fn content_edit_keeps_pages_annotations_fields_and_links() {
         underline: false,
         line_spacing: 0.0,
         direction: pdfcraft_edit::TextDirection::Horizontal,
+        fixed_height: false,
     };
     session.apply(id, Edit::AddText { page: 1, text }).unwrap();
     let after = session.get(id).unwrap();
@@ -10712,6 +10714,7 @@ fn content_refresh_lists_match_the_storages_an_edit_touches() {
                 underline: false,
                 line_spacing: 0.0,
                 direction: pdfcraft_edit::TextDirection::Horizontal,
+                fixed_height: false,
             },
         },
         Edit::MoveObjects { page: 0, objects: vec![target(crate::ObjectKind::Added)], offset: [1.0, 0.0] },
@@ -13506,6 +13509,29 @@ fn a_paragraph_of_the_page_comes_in_front_and_goes_behind() {
     assert_eq!(red(&session), only_below, "undo restores the page");
 }
 
+/// Thai edition: the Thai text PdfCraft writes wraps each syllable's show in an `/ActualText`
+/// span of its own, with the shifts of a move beside the glyphs once it has been moved. Arrange
+/// refused such a paragraph ("carries replacement text"); each show now goes into the layer inside
+/// its span, the shifts stay on the page, and the paragraph comes in front and reads the same.
+#[test]
+fn a_paragraph_with_a_span_round_each_show_comes_in_front() {
+    let body = "/Span <</ActualText (Hid)>> BDC BT /F1 24 Tf 1 0 0 rg 20 150 Td (Hid) Tj ET EMC \
+        /Span <</ActualText (den)>> BDC BT /F1 24 Tf 1 0 0 rg 32 150 Td [-1000] TJ (den) Tj [1000] TJ ET EMC \
+        0 0 1 rg 10 140 300 40 re f";
+    let mut session = Session::new();
+    let id = session.open("spans.pdf", None, Arc::new(one_line_page("/Font << /F1 4 0 R >>", body)), None).unwrap();
+    let blocks = |s: &Session| s.get(id).unwrap().text_blocks(0);
+    let red = |s: &Session| shown(s, id, 0).rgba.chunks(4).filter(|px| px[0] > 180 && px[1] < 80 && px[2] < 80).count();
+    let before = blocks(&session);
+    let at = before.iter().position(|b| b.text == "Hidden").unwrap_or_else(|| panic!("{:?}", before.iter().map(|b| &b.text).collect::<Vec<_>>()));
+    let hidden = red(&session);
+    session.apply(id, Edit::ArrangeParagraph { page: 0, block: at, how: Arrange::Front }).unwrap();
+    assert!(red(&session) > hidden + 50, "the red text now shows over the blue box");
+    let after = blocks(&session);
+    let moved = after.iter().find(|b| b.text == "Hidden").expect("it still reads the same");
+    assert!(moved.rect.iter().zip(before[at].rect).all(|(a, b)| (a - b).abs() < 0.01), "{:?} → {:?}", before[at].rect, moved.rect);
+}
+
 /// Copy and paste: the copies of a comment and its reply land on the asked-for page of another
 /// document under names of their own (nothing replaced; a second paste gives a second set),
 /// undo takes a paste away as one step, and a clipboard without comments is refused.
@@ -15632,6 +15658,346 @@ fn styled_text_keeps_each_parts_weight_and_underline() {
     assert_eq!(underlined, vec!["Hard"], "{b:?}");
 }
 
+/// Thai edition: a word of a recognised row recoloured stays on its one row, drawn no wider than
+/// the scanned row. Recognition sizes a row by its height in the scan, whose face is not TH
+/// Sarabun PSK: drawn at that size the row came out wider than it was read, broke at the box's
+/// edge over the row below, and looked too tall (as on a real Angsana-like form, 18.2 pt).
+#[test]
+fn a_recoloured_word_keeps_its_ocr_row_on_one_row() {
+    let mut s = Session::new();
+    let pdf = s.create_blank(595.0, 842.0, 1).unwrap();
+    let id = s.open("blank.pdf", None, pdf, None).unwrap();
+    let texts = ["เสมือนหนึ่งข้าพเจ้าได้ทำการด้วยตนเอง", "เพื่อเป็นหลักฐานข้าพเจ้าได้ลงลายมือชื่อหรือพิมพ์ลายนิ้วมือไว้เป็น"];
+    let mut x = 60.0;
+    // Narrow print, as a scan of an Angsana-like face reads: 5 pt a character at 19 pt high.
+    let words: Vec<crate::ocr::PlacedWord> = texts
+        .iter()
+        .map(|t| {
+            let width = t.chars().count() as f64 * 5.0;
+            let w = crate::ocr::PlacedWord {
+                text: (*t).into(),
+                origin: [x, 600.0],
+                across: [width, 0.0],
+                up: [0.0, 19.0],
+                confidence: None,
+                source: "t".into(),
+            };
+            x += width + 5.0;
+            w
+        })
+        .collect();
+    s.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();
+    let block = s.get(id).unwrap().text_blocks(0).remove(0);
+    assert_eq!(block.rows.len(), 1, "{block:?}");
+    let row = (block.rect[2] - block.rect[0]).abs();
+    let drawn = pdfcraft_fonts::thai_text::line_width(&block.editor_text, block.size, false, false, &pdfcraft_fonts::helvetica_width);
+    assert!(drawn > row * 1.05, "at the size read, the row draws wider than the scan: {drawn} > {row}");
+    let text = block.editor_text.clone();
+    let end = text.char_indices().nth(6).map_or(text.len(), |(i, _)| i);
+    let style = crate::BlockStyle {
+        ranges: vec![crate::RangeStyle {
+            range: 0..end,
+            color: Some([0.9, 0.1, 0.1]),
+            family: None,
+            resource: None,
+            size: None,
+            underline: None,
+            char_spacing: None,
+            scale: None,
+        }],
+        ..Default::default()
+    };
+    s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text, style }).unwrap();
+    let blocks = s.get(id).unwrap().text_blocks(0);
+    assert_eq!(blocks.len(), 1, "{blocks:?}");
+    assert_eq!(blocks[0].rows.len(), 1, "the recoloured row stays one row: {:?}", blocks[0]);
+    assert!(blocks[0].size < block.size, "drawn smaller than the size read: {} < {}", blocks[0].size, block.size);
+    let width = (blocks[0].rect[2] - blocks[0].rect[0]).abs();
+    assert!(width <= row * 1.02, "no wider than the scanned row: {width} vs {row}");
+}
+
+/// Thai edition: an OCR row of English and Thai words (the English written in Helvetica stretched
+/// to each word's box), recoloured whole, is drawn as wide as the scanned row. Its paragraph
+/// read as Helvetica, not as the OCR's, so it was drawn at the read size unstretched: far
+/// narrower and shorter than the scan's words.
+#[test]
+fn a_recoloured_ocr_row_of_english_and_thai_fills_its_scanned_row() {
+    let mut s = Session::new();
+    let pdf = s.create_blank(595.0, 842.0, 1).unwrap();
+    let id = s.open("blank.pdf", None, pdf, None).unwrap();
+    // As the scan reads (testOCR's "Desktop computer สำหรับ Back Office"): 4.4 pt a character
+    // at 12 pt high.
+    let mut x = 100.0;
+    let words: Vec<crate::ocr::PlacedWord> = ["Desktop", "computer", "สำหรับ", "Back", "Office"]
+        .iter()
+        .map(|t| {
+            let width = t.chars().count() as f64 * 4.4;
+            let w = crate::ocr::PlacedWord {
+                text: (*t).into(),
+                origin: [x, 600.0],
+                across: [width, 0.0],
+                up: [0.0, 12.0],
+                confidence: None,
+                source: "t".into(),
+            };
+            x += width + 3.0;
+            w
+        })
+        .collect();
+    let row = x - 3.0 - 100.0;
+    s.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();
+    let block = s.get(id).unwrap().text_blocks(0).remove(0);
+    assert!(block.invisible && block.rows.len() == 1, "{block:?}");
+    let style = crate::BlockStyle { color: Some([0.9, 0.1, 0.1]), ..Default::default() };
+    s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: block.editor_text.clone(), style }).unwrap();
+    let blocks = s.get(id).unwrap().text_blocks(0);
+    assert_eq!(blocks.len(), 1, "{blocks:?}");
+    assert_eq!(blocks[0].rows.len(), 1, "{:?}", blocks[0]);
+    let width = (blocks[0].rect[2] - blocks[0].rect[0]).abs();
+    assert!(width > row * 0.9 && width < row * 1.03, "as wide as the scanned row: {width} vs {row}: {:?}", blocks[0]);
+}
+
+/// Thai edition: an OCR row given a width of 150% from the Format text panel is drawn half again
+/// as wide as when it is drawn plain, at the same size. The row was sized to the scan's width after
+/// the scale, so the scale came out undone: the same width, smaller letters.
+#[test]
+fn an_ocr_row_takes_the_width_asked_for() {
+    let draw = |style: crate::BlockStyle| {
+        let mut s = Session::new();
+        let pdf = s.create_blank(595.0, 842.0, 1).unwrap();
+        let id = s.open("blank.pdf", None, pdf, None).unwrap();
+        let mut x = 100.0;
+        let words: Vec<crate::ocr::PlacedWord> = ["Desktop", "computer", "สำหรับ", "Back", "Office"]
+            .iter()
+            .map(|t| {
+                let width = t.chars().count() as f64 * 4.4;
+                let w = crate::ocr::PlacedWord {
+                    text: (*t).into(),
+                    origin: [x, 600.0],
+                    across: [width, 0.0],
+                    up: [0.0, 12.0],
+                    confidence: None,
+                    source: "t".into(),
+                };
+                x += width + 3.0;
+                w
+            })
+            .collect();
+        s.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();
+        let text = s.get(id).unwrap().text_blocks(0).remove(0).editor_text;
+        s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text, style }).unwrap();
+        s.get(id).unwrap().text_blocks(0).remove(0)
+    };
+    let plain = draw(crate::BlockStyle { color: Some([0.9, 0.1, 0.1]), ..Default::default() });
+    let wide = draw(crate::BlockStyle { color: Some([0.9, 0.1, 0.1]), scale: Some(150.0), ..Default::default() });
+    let width = |b: &crate::TextBlock| (b.rect[2] - b.rect[0]).abs();
+    assert!((wide.size - plain.size).abs() < plain.size * 0.02, "the same size: {} vs {}", wide.size, plain.size);
+    let ratio = width(&wide) / width(&plain);
+    assert!((1.4..1.6).contains(&ratio), "half again as wide: {ratio} ({wide:?} vs {plain:?})");
+}
+
+/// Thai edition: an OCR row of English and Thai, one word made red, dragged twice (each drag a
+/// little up or down as a hand drags) stays one paragraph. The second drag broke it into three
+/// boxes: "Desktop computer", "สำหรับ" and "Back Office".
+#[test]
+fn an_ocr_row_dragged_twice_stays_one_paragraph() {
+    let mut s = Session::new();
+    let pdf = s.create_blank(595.0, 842.0, 1).unwrap();
+    let id = s.open("blank.pdf", None, pdf, None).unwrap();
+    let mut x = 100.0;
+    let words: Vec<crate::ocr::PlacedWord> = ["Desktop", "computer", "สำหรับ", "Back", "Office"]
+        .iter()
+        .map(|t| {
+            let width = t.chars().count() as f64 * 4.4;
+            let w = crate::ocr::PlacedWord {
+                text: (*t).into(),
+                origin: [x, 600.0],
+                across: [width, 0.0],
+                up: [0.0, 12.0],
+                confidence: None,
+                source: "t".into(),
+            };
+            x += width + 4.0;
+            w
+        })
+        .collect();
+    s.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();
+    let text = s.get(id).unwrap().text_blocks(0).remove(0).editor_text;
+    let red = crate::BlockStyle {
+        ranges: vec![crate::RangeStyle {
+            range: 0..7,
+            color: Some([0.9, 0.13, 0.13]),
+            family: None,
+            resource: None,
+            size: None,
+            underline: None,
+            char_spacing: None,
+            scale: None,
+        }],
+        ..Default::default()
+    };
+    s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text, style: red }).unwrap();
+    let texts = |s: &Session| s.get(id).unwrap().text_blocks(0).into_iter().map(|b| b.text).collect::<Vec<_>>();
+    let first = texts(&s);
+    assert_eq!(first.len(), 1, "{first:?}");
+    for offset in [[30.0, 20.0], [22.0, 28.0]] {
+        let target =
+            s.get(id).unwrap().editable_objects(0).unwrap().into_iter().find(|o| o.target.kind == ObjectKind::Text).map(|o| o.target).unwrap();
+        s.apply(id, Edit::MoveObjects { page: 0, objects: vec![target], offset }).unwrap();
+        assert_eq!(texts(&s), first, "one paragraph after a move by {offset:?}");
+    }
+}
+
+/// Thai edition: a part of a text box made bold (or coloured) while it is typed lands on that part,
+/// even when the box, made text of the page, reads as one paragraph with the text right above it.
+/// The part was counted from the start of that paragraph: "เสมือน" made bold gave "แทนข้า" of the
+/// row above. Parts given to text added in several colours (a merge) land the same way.
+#[test]
+fn a_part_of_a_box_lands_on_the_box_beside_text_it_joins() {
+    for styled in [false, true] {
+        let mut s = Session::new();
+        let pdf = s.create_blank(595.0, 842.0, 1).unwrap();
+        let id = s.open("blank.pdf", None, pdf, None).unwrap();
+        // The row above: a box merged from two, all of it red, as the merge made it.
+        let above = AddedText {
+            text: "แทนข้าพเจ้าจนเสร็จการ".into(),
+            rect: [60.0, 600.0, 300.0, 620.0],
+            size: 16.0,
+            color: [0.9, 0.1, 0.1],
+            ..Default::default()
+        };
+        s.apply(id, Edit::AddText { page: 0, text: above }).unwrap();
+        let line = s.get(id).unwrap().text_blocks(0).remove(0);
+        let lead = (line.rect[3] - line.rect[1]) * 0.85;
+        let below = AddedText {
+            text: "เสมือนหนึ่งข้าพเจ้า".into(),
+            rect: [line.rect[0], line.rect[1] - lead, line.rect[0] + 200.0, line.rect[1] - lead + (line.rect[3] - line.rect[1])],
+            size: 16.0,
+            ..Default::default()
+        };
+        if styled {
+            let runs = vec![
+                TextRun { chars: 0..6, color: [0.0, 0.0, 0.9], size: 16.0, ..Default::default() },
+                TextRun { chars: 6..19, color: [0.0; 3], size: 16.0, ..Default::default() },
+            ];
+            s.apply(id, Edit::AddStyledText { page: 0, text: below, runs }).unwrap();
+        } else {
+            let part = crate::RangeStyle {
+                range: 0..6,
+                family: Some((crate::FontFamily::Helvetica, true, false)),
+                resource: None,
+                size: None,
+                color: Some([0.0, 0.0, 0.9]),
+                underline: None,
+                char_spacing: None,
+                scale: None,
+            };
+            s.apply(id, Edit::AddTextPart { page: 0, text: below, part }).unwrap();
+        }
+        let blocks = s.get(id).unwrap().text_blocks(0);
+        assert_eq!(blocks.len(), 1, "the two read as one paragraph: {blocks:?}");
+        let lines = s.get(id).unwrap().text_lines(0);
+        let blue: Vec<String> = lines.iter().filter(|l| l.color == [0.0, 0.0, 0.9]).map(|l| l.text.trim().to_owned()).collect();
+        assert!(blue.iter().any(|t| t.starts_with("เสม")), "styled={styled}: the part given is the box's: {blue:?}");
+        assert!(!blue.iter().any(|t| t.contains("แทน") || t.contains("จนเสร็จ")), "styled={styled}: none of the row above: {blue:?}");
+        let red: Vec<String> = lines.iter().filter(|l| l.color == [0.9, 0.1, 0.1]).map(|l| l.text.trim().to_owned()).collect();
+        assert_eq!(red, vec!["แทนข้าพเจ้าจนเสร็จการ".to_owned()], "styled={styled}: the row above keeps its own: {lines:?}");
+    }
+}
+
+/// Thai edition: Merge text boxes groups paragraphs without moving a glyph: four OCR rows (the first
+/// set in) and a paragraph of two colours become one group, every line where it was, as many
+/// paragraphs as before. The group holds through a part recoloured, an OCR row drawn in black,
+/// two moves of the whole group, and a save and reopen; ungrouped, they are as they were.
+#[test]
+fn merged_paragraphs_keep_their_place_and_stay_together() {
+    let mut s = Session::new();
+    let pdf = s.create_blank(595.0, 842.0, 1).unwrap();
+    let id = s.open("blank.pdf", None, pdf, None).unwrap();
+    let rows = [(120.0, "แม้มิได้มีการกำหนดไว้"), (80.0, "นำความอับอายเสื่อมเสีย"), (80.0, "ตนหรือเพื่อช่วยเหลือ"), (80.0, "หน่วยงานอื่นที่นอกเหนือ")];
+    let words: Vec<crate::ocr::PlacedWord> = rows
+        .iter()
+        .enumerate()
+        .map(|(k, (x, text))| crate::ocr::PlacedWord {
+            text: (*text).into(),
+            origin: [*x, 600.0 - 24.0 * k as f64],
+            across: [text.chars().count() as f64 * 6.0, 0.0],
+            up: [0.0, 16.0],
+            confidence: None,
+            source: "t".into(),
+        })
+        .collect();
+    s.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();
+    let text = AddedText {
+        text: "แทนข้าพเจ้าจนเสร็จการ".into(), rect: [80.0, 680.0, 300.0, 700.0], size: 16.0, ..Default::default()
+    };
+    let runs = vec![
+        TextRun { chars: 0..3, color: [0.9, 0.1, 0.1], size: 16.0, ..Default::default() },
+        TextRun { chars: 3..21, color: [0.0; 3], size: 16.0, ..Default::default() },
+    ];
+    s.apply(id, Edit::AddStyledText { page: 0, text, runs }).unwrap();
+    let shape = |s: &Session| {
+        let doc = s.get(id).unwrap();
+        let lines: Vec<(String, [f64; 4], [f64; 3])> = doc.text_lines(0).into_iter().map(|l| (l.text, l.rect, l.color)).collect();
+        (doc.text_blocks(0), lines)
+    };
+    let (before, lines_before) = shape(&s);
+    assert_eq!(before.len(), 5, "{before:?}");
+    let all: Vec<usize> = (0..before.len()).collect();
+    s.apply(id, Edit::GroupText { page: 0, blocks: all, added: Vec::new(), group: true }).unwrap();
+    let (grouped, lines_grouped) = shape(&s);
+    assert_eq!(grouped.len(), 5, "as many paragraphs: {grouped:?}");
+    let g = grouped.first().and_then(|b| b.group).expect("a group");
+    assert!(grouped.iter().all(|b| b.group == Some(g)), "{grouped:?}");
+    let near = |a: [f64; 4], b: [f64; 4]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.01);
+    assert_eq!(lines_grouped.len(), lines_before.len());
+    for (a, b) in lines_before.iter().zip(&lines_grouped) {
+        assert!(a.0 == b.0 && near(a.1, b.1) && a.2 == b.2, "every line where it was, in its colour: {a:?} -> {b:?}");
+    }
+    // A part of the visible paragraph recoloured, then an OCR row drawn in black.
+    let visible = grouped.iter().position(|b| !b.invisible).unwrap();
+    let ranges = vec![crate::RangeStyle {
+        range: 3.."แทนข้า".len(),
+        family: None,
+        resource: None,
+        size: None,
+        color: Some([0.1, 0.1, 0.9]),
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    }];
+    let text = grouped[visible].editor_text.clone();
+    s.apply(id, Edit::EditTextBlock { page: 0, block: visible, text, style: crate::BlockStyle { ranges, ..Default::default() } }).unwrap();
+    let blocks = s.get(id).unwrap().text_blocks(0);
+    let ocr = blocks.iter().position(|b| b.text.contains("นำความ")).unwrap();
+    let text = blocks[ocr].editor_text.clone();
+    s.apply(id, Edit::EditTextBlock { page: 0, block: ocr, text, style: crate::BlockStyle { color: Some([0.0; 3]), ..Default::default() } }).unwrap();
+    let (blocks, _) = shape(&s);
+    assert_eq!(blocks.len(), 5, "{blocks:?}");
+    assert!(blocks.iter().all(|b| b.group == Some(g)), "the group holds through the edits: {blocks:?}");
+    // The whole group moved twice.
+    for offset in [[20.0, -10.0], [-5.0, 30.0]] {
+        let objects: Vec<ObjectTarget> = (0..5).map(|index| ObjectTarget { kind: ObjectKind::Text, index }).collect();
+        s.apply(id, Edit::MoveObjects { page: 0, objects, offset }).unwrap();
+        let (blocks, _) = shape(&s);
+        assert_eq!(blocks.len(), 5, "{blocks:?}");
+        assert!(blocks.iter().all(|b| b.group == Some(g)), "the group holds through a move: {blocks:?}");
+    }
+    // Saved and opened again.
+    let bytes = s.save_bytes(id).unwrap();
+    let again = s.open("again.pdf", None, bytes, None).unwrap();
+    let blocks = s.get(again).unwrap().text_blocks(0);
+    assert!(blocks.len() == 5 && blocks.iter().all(|b| b.group == Some(g)), "saved with the file: {blocks:?}");
+    // Ungrouped: no group, every line where it was.
+    let (before, lines_before) = shape(&s);
+    s.apply(id, Edit::GroupText { page: 0, blocks: (0..5).collect(), added: Vec::new(), group: false }).unwrap();
+    let (after, lines_after) = shape(&s);
+    assert!(after.len() == before.len() && after.iter().all(|b| b.group.is_none()), "{after:?}");
+    for (a, b) in lines_before.iter().zip(&lines_after) {
+        assert!(a.0 == b.0 && near(a.1, b.1), "{a:?} -> {b:?}");
+    }
+}
+
 /// Rejected host writeback must invalidate globals for both synchronous and native completion.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
@@ -16137,4 +16503,240 @@ fn the_page_under_a_moved_picture_is_rendered_without_it() {
     assert_eq!(d.page_images(0).len(), 1);
     assert!(!d.dirty);
     assert!(red(&shown(&s, id, 0)), "the document still draws it");
+}
+
+/// Thai edition: a paragraph of two colours ("หนัง" red) moves, then moves again, staying one
+/// paragraph. The first move split it in two, and the second was refused ("a selected text
+/// operation cannot be moved"): the offsets the first move set around each part counted as the
+/// paragraph's text, though they draw nothing.
+#[test]
+fn a_two_colour_paragraph_moves_twice_and_stays_one() {
+    let mut s = Session::new();
+    let pdf = s.create_blank(595.0, 842.0, 1).unwrap();
+    let id = s.open("blank.pdf", None, pdf, None).unwrap();
+    let t = "หนังสือมอบอำนาจทั่วไป";
+    let text = AddedText { text: t.into(), rect: [200.0, 700.0, 500.0, 724.0], size: 18.0, ..Default::default() };
+    let n = t.chars().count();
+    let runs = vec![
+        TextRun { chars: 0..4, color: [0.9, 0.1, 0.1], size: 18.0, ..Default::default() },
+        TextRun { chars: 4..n, color: [0.0; 3], size: 18.0, ..Default::default() },
+    ];
+    s.apply(id, Edit::AddStyledText { page: 0, text, runs }).unwrap();
+    let texts = |s: &Session| s.get(id).unwrap().text_blocks(0).into_iter().map(|b| b.text).collect::<Vec<_>>();
+    assert_eq!(texts(&s), vec![t.to_owned()], "one paragraph to begin with");
+    let paragraph = |s: &Session| {
+        s.get(id).unwrap().editable_objects(0).unwrap().into_iter().find(|o| o.target.kind == ObjectKind::Text).map(|o| (o.target, o.rect)).unwrap()
+    };
+    let (target, before) = paragraph(&s);
+    s.apply(id, Edit::MoveObjects { page: 0, objects: vec![target], offset: [-120.0, 0.0] }).unwrap();
+    assert_eq!(texts(&s), vec![t.to_owned()], "still one paragraph after a move");
+    let (target, moved) = paragraph(&s);
+    assert!((moved[0] - (before[0] - 120.0)).abs() < 1.0, "{before:?} → {moved:?}");
+    s.apply(id, Edit::MoveObjects { page: 0, objects: vec![target], offset: [60.0, 0.0] }).expect("a second move");
+    let (_, again) = paragraph(&s);
+    assert!((again[0] - (before[0] - 60.0)).abs() < 1.0, "{before:?} → {again:?}");
+    assert_eq!(texts(&s), vec![t.to_owned()]);
+}
+
+/// Thai edition: a Thai paragraph of several colours, Ctrl+dragged (copied as a text box with the
+/// colours of its parts), keeps its bold, italic and underline, each alone and together: the
+/// copy of a bold one came out regular, though Copy and Paste of the same paragraph kept it bold.
+#[test]
+fn a_paragraph_of_several_colours_copies_bold_italic_and_underlined() {
+    for (bold, italic, underline) in [(true, false, false), (false, true, false), (false, false, true), (true, true, true)] {
+        let mut s = Session::new();
+        let pdf = s.create_from_images(&[("scan.png".into(), crate::export::encode_png(2, 2, &[200; 16]).unwrap())]).unwrap();
+        let id = s.open("scan.pdf", None, pdf, None).unwrap();
+        let text =
+            AddedText {
+                text: "หนังสือมอบอำนาจ".into(), rect: [10.0, 10.0, 300.0, 40.0], size: 20.0, bold, italic, underline, ..Default::default()
+            };
+        let run = |chars: std::ops::Range<usize>, color: [f64; 3]| TextRun { chars, color, size: 20.0, bold, italic, underline };
+        let runs = vec![run(0..3, [1.0, 0.0, 0.0]), run(3..7, [1.0, 0.5, 0.0]), run(7..15, [0.0; 3])];
+        s.apply(id, Edit::AddStyledText { page: 0, text, runs }).unwrap();
+        let doc = s.get(id).unwrap();
+        let lines = doc.text_lines(0);
+        let looks: Vec<_> = lines.iter().map(|l| (l.text.clone(), l.bold, l.italic)).collect();
+        assert!(!lines.is_empty() && lines.iter().all(|l| l.bold == bold && l.italic == italic), "{bold} {italic} {underline}: {looks:?}");
+        let blocks = doc.text_blocks(0);
+        assert_eq!(blocks.iter().any(|b| b.underlined), underline, "{bold} {italic} {underline}: underlined");
+    }
+}
+
+/// Thai edition, as the owner found it: a paragraph with one part underlined, Ctrl+dragged (the
+/// copy made as a text box underlined as a whole, then given its parts' looks), came out with a
+/// red rule under the whole line, which stayed on the page when the copy was deleted. Only the
+/// underlined part is underlined, and deleting the copy leaves nothing behind.
+#[test]
+fn a_copy_with_one_part_underlined_leaves_no_rule_behind() {
+    let mut s = Session::new();
+    let pdf = s.create_from_images(&[("scan.png".into(), crate::export::encode_png(2, 2, &[200; 16]).unwrap())]).unwrap();
+    let id = s.open("scan.pdf", None, pdf, None).unwrap();
+    // The rectangles the page's content draws (an underline is one).
+    let rules = |s: &Session| {
+        let doc = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+        let page = pdfcraft_model::pages(&doc)[0].clone();
+        let contents = page.dict.get(b"Contents").map(|c| doc.resolve(c)).expect("contents");
+        let refs: Vec<pdfcraft_cos::Object> = match &*contents {
+            pdfcraft_cos::Object::Array(a) => a.clone(),
+            _ => vec![page.dict.get(b"Contents").cloned().unwrap()],
+        };
+        refs.iter()
+            .map(|r| match &*doc.resolve(r) {
+                pdfcraft_cos::Object::Stream(st) => st.decoded().unwrap().windows(3).filter(|w| *w == b" re").count(),
+                _ => 0,
+            })
+            .sum::<usize>()
+    };
+    let none = rules(&s);
+    let text = AddedText {
+        text: "หนังสือมอบอำนาจ".into(),
+        rect: [10.0, 10.0, 300.0, 40.0],
+        size: 20.0,
+        underline: true,
+        color: [1.0, 0.0, 0.0],
+        ..Default::default()
+    };
+    let runs = vec![
+        TextRun { chars: 0..3, color: [1.0, 0.0, 0.0], size: 20.0, ..Default::default() },
+        TextRun { chars: 3..7, color: [0.0; 3], size: 20.0, underline: true, ..Default::default() },
+        TextRun { chars: 7..15, color: [1.0, 0.5, 0.0], size: 20.0, ..Default::default() },
+    ];
+    s.apply(id, Edit::AddStyledText { page: 0, text, runs }).unwrap();
+    let doc = s.get(id).unwrap();
+    let b = doc.text_blocks(0).into_iter().find(|b| b.text.contains("มอบ")).expect("the copy");
+    assert!(!b.underlined_parts.is_empty(), "a part underlined: {b:?}");
+    for part in &b.underlined_parts {
+        let under = b.editor_text.get(part.clone()).unwrap_or_default();
+        assert!(!under.contains("มอบ") && !under.contains("หน"), "only the part asked for: {under:?} of {:?}", b.editor_text);
+    }
+    let block = doc.text_blocks(0).iter().position(|b| b.text.contains("มอบ")).unwrap();
+    s.apply(id, Edit::DeleteObjects { page: 0, objects: vec![crate::ObjectTarget { kind: crate::ObjectKind::Text, index: block }] }).unwrap();
+    assert_eq!(rules(&s), none, "no rule left behind");
+}
+
+/// Thai edition, as the owner's heading was: parts in their own colours, weights and slants, two
+/// of them underlined ("มอบ" regular, "อำนาจ" orange, bold and italic). Copied (Ctrl+drag), the
+/// underlined parts stay underlined, and only they.
+#[test]
+fn a_copy_of_a_heading_of_mixed_looks_keeps_its_underlined_parts() {
+    let mut s = Session::new();
+    let pdf = s.create_from_images(&[("scan.png".into(), crate::export::encode_png(2, 2, &[200; 16]).unwrap())]).unwrap();
+    let id = s.open("scan.pdf", None, pdf, None).unwrap();
+    let text = AddedText {
+        text: "หนังสือมอบอำนาจทั่วไป".into(),
+        rect: [10.0, 10.0, 400.0, 40.0],
+        size: 20.0,
+        bold: true,
+        underline: true,
+        ..Default::default()
+    };
+    let (red, orange, black) = ([1.0, 0.0, 0.0], [1.0, 0.55, 0.0], [0.0; 3]);
+    let runs = vec![
+        TextRun { chars: 0..4, color: red, size: 20.0, bold: true, ..Default::default() },
+        TextRun { chars: 4..7, color: black, size: 20.0, bold: true, italic: true, ..Default::default() },
+        TextRun { chars: 7..10, color: black, size: 20.0, underline: true, ..Default::default() },
+        TextRun { chars: 10..15, color: orange, size: 20.0, bold: true, italic: true, underline: true },
+        TextRun { chars: 15..21, color: black, size: 20.0, bold: true, ..Default::default() },
+    ];
+    s.apply(id, Edit::AddStyledText { page: 0, text, runs }).unwrap();
+    let doc = s.get(id).unwrap();
+    let b = doc.text_blocks(0).into_iter().find(|b| b.text.contains("มอบ")).expect("the copy");
+    let under: Vec<&str> = b.underlined_parts.iter().filter_map(|p| b.editor_text.get(p.clone())).collect();
+    let joined: String = under.concat();
+    assert!(
+        b.underlined && joined.contains("มอบ") && joined.contains("อำนาจ") && !joined.contains("หนัง") && !joined.contains("ทั่ว"),
+        "{under:?} of {:?}",
+        b.editor_text
+    );
+}
+
+/// Owner's report (Thai edition): copies of a heading with underlined parts, deleted, left their
+/// underlines on the page, where nothing owned them. A copy drawn exactly over a paragraph goes
+/// with it when it is deleted (its text was taken as the paragraph's), but only the paragraph's
+/// own underlines went: the copy's stayed. Now both go.
+#[test]
+fn deleting_a_paragraph_takes_the_underlines_of_a_copy_drawn_over_it() {
+    let mut s = Session::new();
+    let pdf = s.create_from_images(&[("scan.png".into(), crate::export::encode_png(2, 2, &[200; 16]).unwrap())]).unwrap();
+    let id = s.open("scan.pdf", None, pdf, None).unwrap();
+    // The underline tags in the page's content.
+    let tags = |s: &Session| {
+        let d = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+        let p = pdfcraft_model::pages(&d)[0].clone();
+        let c = d.resolve(p.dict.get(b"Contents").expect("contents"));
+        let refs: Vec<pdfcraft_cos::Object> = match &*c {
+            pdfcraft_cos::Object::Array(a) => a.clone(),
+            _ => vec![p.dict.get(b"Contents").cloned().unwrap()],
+        };
+        refs.iter()
+            .map(|r| match &*d.resolve(r) {
+                pdfcraft_cos::Object::Stream(st) => st.decoded().unwrap().windows(11).filter(|w| *w == b"PCUnderline").count(),
+                _ => 0,
+            })
+            .sum::<usize>()
+    };
+    let text = AddedText {
+        text: "หนังสือมอบอำนาจทั่วไป".into(), rect: [100.0, 600.0, 400.0, 640.0], size: 20.0, ..Default::default()
+    };
+    let runs = vec![
+        TextRun { chars: 0..7, color: [1.0, 0.0, 0.0], size: 20.0, ..Default::default() },
+        TextRun { chars: 7..10, color: [0.0, 0.4, 0.8], size: 20.0, underline: true, ..Default::default() },
+        TextRun { chars: 10..15, color: [0.0; 3], size: 20.0, ..Default::default() },
+        TextRun { chars: 15..21, color: [1.0, 0.4, 0.6], size: 20.0, italic: true, underline: true, ..Default::default() },
+    ];
+    s.apply(id, Edit::AddStyledText { page: 0, text, runs }).unwrap();
+    assert_eq!(tags(&s), 2, "its two underlined parts");
+    // A copy pasted exactly over it.
+    let clip = s.get(id).unwrap().copy_objects(0, &[crate::ObjectTarget { kind: crate::ObjectKind::Text, index: 0 }]).unwrap();
+    s.apply(id, Edit::PasteObjects { page: 0, clip: Arc::new(clip), offset: [0.0, 0.0] }).unwrap();
+    assert_eq!(tags(&s), 4, "the copy's too");
+    s.apply(id, Edit::DeleteObjects { page: 0, objects: vec![crate::ObjectTarget { kind: crate::ObjectKind::Text, index: 0 }] }).unwrap();
+    let left: Vec<String> = s.get(id).unwrap().text_blocks(0).into_iter().map(|b| b.text).filter(|t| !t.trim().is_empty()).collect();
+    assert!(left.is_empty(), "the copy went with it: {left:?}");
+    assert_eq!(tags(&s), 0, "no underline left behind");
+}
+
+/// Boxes selected together are deleted line by line (the screen's Delete with two or more
+/// paragraphs, Thai edition), so no paragraph left unselected joins one still to go. The lines
+/// went, their underlines stayed: two coloured headings deleted together left their blue rules.
+#[test]
+fn deleting_underlined_lines_takes_their_underlines() {
+    let mut s = Session::new();
+    let pdf = s.create_from_images(&[("scan.png".into(), crate::export::encode_png(2, 2, &[200; 16]).unwrap())]).unwrap();
+    let id = s.open("scan.pdf", None, pdf, None).unwrap();
+    let tags = |s: &Session| {
+        let d = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+        let p = pdfcraft_model::pages(&d)[0].clone();
+        let c = d.resolve(p.dict.get(b"Contents").expect("contents"));
+        let refs: Vec<pdfcraft_cos::Object> = match &*c {
+            pdfcraft_cos::Object::Array(a) => a.clone(),
+            _ => vec![p.dict.get(b"Contents").cloned().unwrap()],
+        };
+        refs.iter()
+            .map(|r| match &*d.resolve(r) {
+                pdfcraft_cos::Object::Stream(st) => st.decoded().unwrap().windows(11).filter(|w| *w == b"PCUnderline").count(),
+                _ => 0,
+            })
+            .sum::<usize>()
+    };
+    for top in [600.0, 500.0] {
+        let text = AddedText {
+            text: "หนังสือมอบอำนาจ".into(), rect: [100.0, top, 400.0, top + 40.0], size: 20.0, ..Default::default()
+        };
+        let runs = vec![
+            TextRun { chars: 0..7, color: [1.0, 0.0, 0.0], size: 20.0, ..Default::default() },
+            TextRun { chars: 7..10, color: [0.0, 0.4, 0.8], size: 20.0, underline: true, ..Default::default() },
+            TextRun { chars: 10..15, color: [0.0; 3], size: 20.0, ..Default::default() },
+        ];
+        s.apply(id, Edit::AddStyledText { page: 0, text, runs }).unwrap();
+    }
+    assert_eq!(tags(&s), 2, "one underlined part each");
+    let mut lines: Vec<usize> = s.get(id).unwrap().text_blocks(0).iter().flat_map(|b| b.lines.clone()).collect();
+    lines.sort_unstable_by(|a, b| b.cmp(a));
+    let edits = lines.into_iter().map(|line| Edit::EditTextLine { page: 0, line, text: String::new() }).collect();
+    s.apply(id, Edit::Batch { label: "Delete content".into(), edits }).unwrap();
+    let left: Vec<String> = s.get(id).unwrap().text_blocks(0).into_iter().map(|b| b.text).filter(|t| !t.trim().is_empty()).collect();
+    assert!(left.is_empty(), "the text went: {left:?}");
+    assert_eq!(tags(&s), 0, "and its underlines with it");
 }

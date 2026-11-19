@@ -101,6 +101,10 @@ pub struct LineEditor {
     /// would miss the choice.
     family_chosen: bool,
     size_chosen: bool,
+    /// A colour was picked (Thai edition). The colour shown for a selection of several colours is
+    /// one of them, so picking it compares equal and coloured nothing: red over a part already red
+    /// with the rest black left the rest black.
+    color_chosen: bool,
     /// Underline, line spacing (× size; 0 = the paragraph's own), character spacing (pt) and
     /// horizontal scale (%), and what they were.
     pub extras: Extras,
@@ -246,8 +250,10 @@ impl LineEditor {
             return face.clone();
         }
         let base = self.source.as_ref().map(|(block, _)| block.base_font.as_str()).unwrap_or_default();
-        // An OCR layer's font is nobody's choice: the paragraph shows as what draws it.
-        if self.look.family != self.look0.family || self.family_chosen || base == pdfcraft_fonts::thai_text::INVISIBLE_NAME {
+        let invisible = self.source.as_ref().is_some_and(|(block, _)| block.invisible);
+        // An OCR layer's font is nobody's choice: the paragraph shows as what draws it (Thai edition:
+        // a row of English words read in Helvetica too).
+        if self.look.family != self.look0.family || self.family_chosen || base == pdfcraft_fonts::thai_text::INVISIBLE_NAME || invisible {
             return self.look.family.label().to_string();
         }
         // "ABCDEF+Calibri" is a subset of Calibri.
@@ -276,7 +282,7 @@ impl LineEditor {
 
     /// Whether the paragraph with `text` in it differs from what was opened.
     fn changes_with(&self, text: &str) -> bool {
-        text != self.original || self.look != self.look0 || self.extras != self.extras0 || self.family_chosen || self.size_chosen
+        text != self.original || self.look != self.look0 || self.extras != self.extras0 || self.family_chosen || self.size_chosen || self.color_chosen
     }
 
     /// Extra width permitted by the editor. Source containers now remain fixed.
@@ -296,7 +302,7 @@ impl LineEditor {
             resource: self.font_resource.clone(),
             family: (l.family != o.family || self.family_chosen || l.bold != o.bold || l.italic != o.italic).then_some((l.family, l.bold, l.italic)),
             size: (self.size_chosen || l.size != o.size).then_some(l.size),
-            color: (l.color != o.color).then_some(l.color),
+            color: (self.color_chosen || l.color != o.color).then_some(l.color),
             // The whole paragraph's alignment when it was picked, or when the rows' own were
             // dropped for it (the rows are where those put them, so leaving it out keeps them there).
             align: (l.align != o.align || l.aligns.is_empty() && !o.aligns.is_empty()).then_some(l.align),
@@ -403,11 +409,18 @@ impl LineEditor {
         self.size_chosen = true;
     }
 
+    /// A colour picked for the selection (or the paragraph) is applied even when it is the one
+    /// shown (Thai edition).
+    pub(crate) fn choose_color(&mut self) {
+        self.color_chosen = true;
+    }
+
     /// After applying formatting: the paragraph now has it. Its selection stays (Thai edition),
     /// so the next choice reaches the same part; [`LineEditor::refresh_source`] drops it when the
     /// rewritten paragraph's text differs.
     pub fn applied(&mut self) {
         self.size_chosen = false;
+        self.color_chosen = false;
         self.font_resource = None;
         self.family_chosen = false;
         self.look0 = self.look.clone();
@@ -456,6 +469,11 @@ impl LineEditor {
         let Some((block, lines)) = &self.source else {
             return self.current_formatting(sources);
         };
+        // An OCR row's words are read in fonts and sizes it isn't drawn in (Thai edition): it shows
+        // as it will be drawn ([`look_of`]), not as "PdfCraftInvisible 12".
+        if block.invisible {
+            return self.current_formatting(sources);
+        }
 
         let spans = block.edited_spans(&self.text);
         let matching_lines: Vec<&pdfcraft_engine::TextLine> = match &self.selection {
@@ -631,6 +649,10 @@ enum Grip {
     /// An edge (screen left or right), dragged to rewrap the paragraph.
     Left,
     Right,
+    /// Its top or bottom edge (Thai edition): dragged, the box gets that height; the text keeps
+    /// its size.
+    Top,
+    Bottom,
 }
 
 /// A paragraph box being dragged: moved, or (from a handle on its left or right edge) resized.
@@ -652,11 +674,92 @@ const EDGE_REACH: f32 = 8.0;
 /// the frame's Move cursor shows, and a press there takes hold of the box (`object_ui`).
 pub(crate) const FRAME_REACH: f32 = 8.0;
 
+/// The edit a paragraph's box resized from `from` to `to` (user space) by the drag `d` makes.
+/// The new width in user space: the box's change, added to the paragraph's own. A moved left side
+/// (in user space; on an upside-down page that's the screen's right edge) moves the paragraph
+/// with it. Thai edition: from the box it was given, when it has one; a top or bottom edge gives
+/// it a height (the text keeps its size), and a top edge moved moves the text with it. On a page
+/// upside down the screen's top is the box's bottom.
+fn resized(page: usize, d: BlockDrag, l: &pdfcraft_engine::TextBlock, from: [f64; 4], to: [f64; 4]) -> Edit {
+    let own = l.frame.unwrap_or(l.rect);
+    let width = (own[2] - own[0]) + (to[2] - to[0]) - (from[2] - from[0]);
+    let vertical = matches!(d.grip, Grip::Top | Grip::Bottom);
+    let height = vertical.then(|| (own[3] - own[1]) + (to[3] - to[1]) - (from[3] - from[1]));
+    // The box's left edge (Thai edition): out past the text, the box grows and the text stays
+    // where it is (room left of it); in past the text's left, the text moves in with it. The text
+    // went with the edge either way, so a box could not be widened to the left.
+    let left = own[0] + (to[0] - from[0]);
+    let (dx, left_room) = match () {
+        _ if to[0] == from[0] => (0.0, None),
+        _ if left <= l.rect[0] => (0.0, Some(l.rect[0] - left)),
+        _ => (left - l.rect[0], Some(0.0)),
+    };
+    let shift = [dx, if vertical { to[3] - from[3] } else { 0.0 }];
+    let style = pdfcraft_engine::BlockStyle {
+        width: (!vertical).then_some(width),
+        height,
+        left_room,
+        offset: (shift != [0.0, 0.0]).then_some(shift),
+        ..Default::default()
+    };
+    // `editor_text` has a newline for every visual row, so a wrap would come back as a hard break
+    // and a wider box would not reflow it. `reflow_text` rejoins a wrap and keeps a newline that
+    // was typed.
+    Edit::EditTextBlock { page, block: d.block, text: l.reflow_text.clone(), style }
+}
+
+/// Thai edition: the edit a double click on a grip (`owner`, a part other than its body) of a
+/// paragraph with a box of its own makes: its box fitted to its text again.
+fn fit_on_double_click(
+    resp: &egui::Response,
+    owner: Option<(usize, ParagraphPart)>,
+    active: Option<usize>,
+    lines: &[pdfcraft_engine::TextBlock],
+    page: usize,
+) -> Option<Edit> {
+    let (block, _) = owner.filter(|(_, part)| *part != ParagraphPart::Body)?;
+    let l = lines.get(block).filter(|l| l.frame.is_some())?;
+    (resp.double_clicked() && active.is_none()).then(|| Edit::EditTextBlock {
+        page,
+        block,
+        text: l.reflow_text.clone(),
+        style: pdfcraft_engine::BlockStyle { fit_box: true, ..Default::default() },
+    })
+}
+
+/// The screen box of merged group `g` (Thai edition): its paragraphs' boxes together.
+fn group_box(lines: &[pdfcraft_engine::TextBlock], boxes: &[Rect], g: u32) -> Rect {
+    lines.iter().zip(boxes).filter(|(l, _)| l.group == Some(g)).fold(Rect::NOTHING, |r, (_, b)| r.union(*b))
+}
+
+/// The faint outline of each paragraph `own` marks (not the one open, not added text's): a merged
+/// group (Thai edition) is one box, outlined once round all its paragraphs.
+fn paint_outlines(painter: &egui::Painter, lines: &[pdfcraft_engine::TextBlock], boxes: &[Rect], own: &[bool], faint: Stroke) {
+    let mut drawn_groups = Vec::new();
+    for (i, b) in boxes.iter().enumerate() {
+        if !own.get(i).copied().unwrap_or(false) {
+            continue;
+        }
+        match lines.get(i).and_then(|l| l.group) {
+            Some(g) if !drawn_groups.contains(&g) => {
+                drawn_groups.push(g);
+                painter.rect_stroke(group_box(lines, boxes, g), CornerRadius::same(2), faint, egui::StrokeKind::Outside);
+            }
+            Some(_) => {}
+            None => {
+                painter.rect_stroke(*b, CornerRadius::same(2), faint, egui::StrokeKind::Outside);
+            }
+        }
+    }
+}
+
 /// The rewrap handles drawn on a paragraph box (screen): a round grip at each corner (Thai
 /// edition), as an added text box has, so the page's text and the boxes added to it look alike.
 /// Either side's edge, its corners included, rewraps ([`edge_at`]); the height follows the text.
-fn width_handles(b: Rect) -> [Pos2; 4] {
-    [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom()]
+/// The middle of each side has one too (Thai edition), as a text box added to the page has: the
+/// sides are where the width is dragged from.
+fn width_handles(b: Rect) -> [Pos2; 8] {
+    [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom(), b.left_center(), b.right_center(), b.center_top(), b.center_bottom()]
 }
 
 /// The edge of `b` that `p` grabs: anywhere along its height, within reach of the line. A narrow
@@ -671,6 +774,19 @@ fn edge_at(b: Rect, p: Pos2) -> Option<Grip> {
         (true, true) if dl <= dr => Some(Grip::Left),
         (_, true) => Some(Grip::Right),
         (true, false) => Some(Grip::Left),
+        _ if (p.x - b.center().x).abs() <= EDGE_REACH * 1.5 => {
+            // The top and bottom edges (Thai edition), at their middle grips only, and from the
+            // line outward: all of a one-line paragraph's box stays for moving it.
+            let inside = 0.5;
+            let (dt, db) = (p.y - b.top(), b.bottom() - p.y);
+            if dt >= -EDGE_REACH && dt <= inside {
+                Some(Grip::Top)
+            } else if db >= -EDGE_REACH && db <= inside {
+                Some(Grip::Bottom)
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }
@@ -740,7 +856,7 @@ pub(crate) fn is_added_text(xf: &PageXform, info: &DocInfo, page: usize, added: 
 /// Whether `p` lies in the box of one of the paragraphs `lines` on `page`, its edge grips there
 /// included, not beside it: where Add text acts on the page's own paragraphs.
 pub(crate) fn over_paragraph(xf: &PageXform, info: &DocInfo, page: usize, lines: &[pdfcraft_engine::TextBlock], p: Pos2) -> bool {
-    lines.iter().any(|l| paragraph_box(xf, info, page, l.rect).contains(p))
+    lines.iter().any(|l| paragraph_box(xf, info, page, l.frame.unwrap_or(l.rect)).contains(p))
 }
 
 /// The width handles need the page upright (or upside down): on a quarter-turned page the
@@ -758,13 +874,15 @@ pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, lines: &[pdfcraft
     if !xf.rect.contains(p) {
         return None;
     }
-    let boxes: Vec<Rect> = lines.iter().map(|l| paragraph_box(xf, info, page, l.rect)).collect();
+    let boxes: Vec<Rect> = lines.iter().map(|l| paragraph_box(xf, info, page, l.frame.unwrap_or(l.rect))).collect();
     // Edges rewrap closed paragraphs only: around the open one lies its frame (`object_ui`).
     let (block, grip) = grab_at(&boxes, p, has_edges(info, page) && active.is_none())?;
     let paragraph = |part| Owner::Paragraph { block, part };
     Some(match (active, grip) {
         (None, Grip::Left) => Hit::new(paragraph(ParagraphPart::Left), Layer::Handle, egui::CursorIcon::ResizeHorizontal),
         (None, Grip::Right) => Hit::new(paragraph(ParagraphPart::Right), Layer::Handle, egui::CursorIcon::ResizeHorizontal),
+        (None, Grip::Top) => Hit::new(paragraph(ParagraphPart::Top), Layer::Handle, egui::CursorIcon::ResizeVertical),
+        (None, Grip::Bottom) => Hit::new(paragraph(ParagraphPart::Bottom), Layer::Handle, egui::CursorIcon::ResizeVertical),
         (None, Grip::Move) => Hit::new(paragraph(ParagraphPart::Body), Layer::Text, egui::CursorIcon::Move),
         (Some(open), _) if open == block => Hit::new(paragraph(ParagraphPart::Body), Layer::Editor, egui::CursorIcon::Text),
         (Some(_), _) => Hit::new(paragraph(ParagraphPart::Body), Layer::Text, egui::CursorIcon::Text),
@@ -816,6 +934,7 @@ fn open_editor(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::TextBlock], bo
         look0: look_of(l),
         family_chosen: false,
         size_chosen: false,
+        color_chosen: false,
         // An underline PdfCraft drew under all of it shows as on, so it can be turned off (Thai
         // edition); one under a part shows on that part when it is selected.
         extras: Extras { underline: underlined_at(l, &l.editor_text, &(0..l.editor_text.len())), ..Extras::default() },
@@ -849,17 +968,14 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
         view.block_drag = None;
         return true;
     }
-    let boxes: Vec<Rect> = lines.iter().map(|l| paragraph_box(xf, info, page, l.rect)).collect();
+    let boxes: Vec<Rect> = lines.iter().map(|l| paragraph_box(xf, info, page, l.frame.unwrap_or(l.rect))).collect();
     // Outlines stay on their page, like its text (#3061).
     let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(xf.rect.expand(1.0)));
     let active = view.line_editor.as_ref().filter(|e| e.page == page).map(|e| e.block);
     let added = doc.added();
     let faint = Stroke::new(0.75, ACCENT.gamma_multiply(0.35));
-    for (i, b) in boxes.iter().enumerate() {
-        if active != Some(i) && !lines.get(i).is_some_and(|l| is_added_text(xf, info, page, added, l)) {
-            painter.rect_stroke(*b, CornerRadius::same(2), faint, egui::StrokeKind::Outside);
-        }
-    }
+    let own: Vec<bool> = lines.iter().enumerate().map(|(i, l)| active != Some(i) && !is_added_text(xf, info, page, added, l)).collect();
+    paint_outlines(&painter, lines, &boxes, &own, faint);
     // Added text boxes are outlined as the page's paragraphs are (Thai edition), by their own box:
     // their text has no outline of its own ([`is_added_text`]), and without this they showed only
     // under the pointer.
@@ -910,7 +1026,7 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
         && let (Some(b), Some(l)) = (boxes.get(d.block).copied(), lines.get(d.block))
     {
         let p = ptr.pos.unwrap_or(d.start);
-        let dx = p.x - d.start.x;
+        let (dx, dy) = (p.x - d.start.x, p.y - d.start.y);
         let preview = match d.grip {
             // Smart guides (Thai edition), as for pictures.
             Grip::Move => {
@@ -922,27 +1038,31 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
             }
             Grip::Left => Rect::from_min_max(Pos2::new((b.left() + dx).min(b.right() - 12.0), b.min.y), b.max),
             Grip::Right => Rect::from_min_max(b.min, Pos2::new((b.right() + dx).max(b.left() + 12.0), b.max.y)),
+            Grip::Top => Rect::from_min_max(Pos2::new(b.min.x, (b.top() + dy).min(b.bottom() - 8.0)), b.max),
+            Grip::Bottom => Rect::from_min_max(b.min, Pos2::new(b.max.x, (b.bottom() + dy).max(b.top() + 8.0))),
         };
         painter.rect_stroke(preview, CornerRadius::same(2), Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
         let resizing = d.grip != Grip::Move;
         if resizing {
             draw_handles(preview);
         }
-        view.cursor.claim(Layer::Drag, if resizing { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::Move });
+        let icon = match d.grip {
+            Grip::Move => egui::CursorIcon::Move,
+            Grip::Left | Grip::Right => egui::CursorIcon::ResizeHorizontal,
+            Grip::Top | Grip::Bottom => egui::CursorIcon::ResizeVertical,
+        };
+        view.cursor.claim(Layer::Drag, icon);
         if resp.drag_stopped() || !ptr.any_down {
             view.block_drag = None;
             let (from, to) = (user_box(xf, info, page, b), user_box(xf, info, page, preview));
-            let edit = if resizing {
-                // The new width in user space: the box's change, added to the paragraph's own. A
-                // moved left side (in user space; on an upside-down page that's the screen's right
-                // edge) moves the paragraph with it.
-                let width = (l.rect[2] - l.rect[0]) + (to[2] - to[0]) - (from[2] - from[0]);
-                let shift = to[0] - from[0];
-                let style = pdfcraft_engine::BlockStyle { width: Some(width), offset: (shift != 0.0).then_some([shift, 0.0]), ..Default::default() };
-                // `editor_text` has a newline for every visual row, so a wrap would come back as a
-                // hard break and a wider box would not reflow it. `reflow_text` rejoins a wrap
-                // and keeps a newline that was typed.
-                Edit::EditTextBlock { page, block: d.block, text: l.reflow_text.clone(), style }
+            // Dropped on another page (Thai edition): it goes there.
+            let elsewhere = (!resizing).then(|| view.other_page_at(page, p)).flatten().and_then(|(to_page, txf)| {
+                crate::object_ui::move_to_page(doc, page, &[ObjectTarget { kind: ObjectKind::Text, index: d.block }], preview, (to_page, &txf))
+            });
+            let edit = if let Some(edit) = elsewhere {
+                edit
+            } else if resizing {
+                resized(page, d, l, from, to)
             } else {
                 // Translation must keep the selected source operators. Rewriting unchanged text
                 // would also remove unrelated paragraphs that now overlap this one (#594).
@@ -966,6 +1086,12 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
         PagePress::Mine(Owner::Paragraph { block, part }) => Some((block, part)),
         _ => None,
     };
+    // A double click on a grip of a box given a size of its own fits it to its text again (Thai
+    // edition), as Word's text boxes do; a box dragged to a size keeps it.
+    if let Some(edit) = fit_on_double_click(resp, owner, active, lines, page) {
+        view.pending_edit = Some(edit);
+        return true;
+    }
     // Add text holds text that can't be drawn where it is being typed (#125).
     let held_draft = adding.is_some() && view.content.blocked().is_some();
     if ptr.drag_started
@@ -978,6 +1104,8 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
             ParagraphPart::Body => Grip::Move,
             ParagraphPart::Left => Grip::Left,
             ParagraphPart::Right => Grip::Right,
+            ParagraphPart::Top => Grip::Top,
+            ParagraphPart::Bottom => Grip::Bottom,
         };
         view.block_drag = Some(BlockDrag { page, block, generation: doc.edit_generation(), start: o, grip });
         return true;
@@ -990,15 +1118,24 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
         _ => None,
     };
     if let Some(b) = hovered.filter(|_| !view.objects.holds(page) && !view.content.moving_on(page)).and_then(|h| boxes.get(h).map(|b| (h, *b))) {
+        // A paragraph of a merged group shows its group's one box (Thai edition), without the
+        // grips of a paragraph alone.
+        let group = lines.get(b.0).and_then(|l| l.group);
         if active != Some(b.0) {
-            painter.rect_stroke(b.1, CornerRadius::same(2), Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
+            let outline = group.map_or(b.1, |g| group_box(lines, &boxes, g));
+            painter.rect_stroke(outline, CornerRadius::same(2), Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
         }
-        if upright && active.is_none() {
+        if upright && active.is_none() && group.is_none() {
             draw_handles(b.1);
         }
     }
     // A click opens the paragraph the press was on.
-    let Some((hit, _)) = owner else { return hovered.is_some() };
+    let Some((hit, part)) = owner else { return hovered.is_some() };
+    // Not from a grip of a box given a size of its own (Thai edition): the second click of a
+    // double click there fits the box to its text, which an editor opened by the first prevented.
+    if resp.clicked() && part != ParagraphPart::Body && lines.get(hit).is_some_and(|l| l.frame.is_some()) {
+        return true;
+    }
     if resp.clicked() {
         // Add text: text that can't be drawn stays where it is being typed (#125), and text being
         // typed is finished first.
@@ -1460,6 +1597,50 @@ C", &picked
         assert!((turn_degrees_delta(c, start, p_35, false) + 10.0).abs() < 1e-2);
     }
 
+    /// Thai edition: a paragraph whose one run is underlined in part (its middle word) is copied
+    /// (Ctrl+drag) with that part underlined, not to the run's end; and Copy and Paste of it
+    /// takes the underline along, which it left behind.
+    #[test]
+    fn a_part_underlined_inside_a_run_copies_as_it_is() {
+        let mut s = pdfcraft_engine::Session::new();
+        let pdf = s.create_from_images(&[("scan.png".into(), pdfcraft_engine::export::encode_png(2, 2, &[200; 16]).unwrap())]).unwrap();
+        let id = s.open("scan.pdf", None, pdf, None).unwrap();
+        // Thai, as the owner's paragraph was: drawn shaped, in a span of its own, which a copy
+        // must not leave half open ("its content ends marked content it didn't begin").
+        let text =
+            pdfcraft_engine::AddedText {
+                text: "หนังสือ มอบอำนาจ ทั่วไป".into(), rect: [10.0, 10.0, 300.0, 30.0], size: 14.0, ..Default::default()
+            };
+        s.apply(id, pdfcraft_engine::Edit::AddText { page: 0, text }).unwrap();
+        s.apply(id, pdfcraft_engine::Edit::ReleaseContent { page: 0, index: 0 }).unwrap();
+        let b = s.get(id).unwrap().text_blocks(0).remove(0);
+        let at = b.editor_text.find("มอบอำนาจ").unwrap();
+        let range = pdfcraft_engine::RangeStyle {
+            range: at..at + "มอบอำนาจ".len(),
+            family: None,
+            resource: None,
+            size: None,
+            color: None,
+            underline: Some(true),
+            char_spacing: None,
+            scale: None,
+        };
+        let style = pdfcraft_engine::BlockStyle { ranges: vec![range], ..Default::default() };
+        s.apply(id, pdfcraft_engine::Edit::EditTextBlock { page: 0, block: 0, text: b.editor_text.clone(), style }).unwrap();
+        let doc = s.get(id).unwrap();
+        let b = doc.text_blocks(0).remove(0);
+        let runs = paragraph_runs(&b, &doc.text_lines(0));
+        let under: Vec<String> =
+            runs.iter().filter(|r| r.underline).map(|r| b.editor_text.chars().skip(r.chars.start).take(r.chars.len()).collect()).collect();
+        assert_eq!(under, ["มอบอำนาจ"], "{runs:?}");
+        // Copy and Paste: the copy is underlined too.
+        let clip = doc.copy_objects(0, &[pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::Text, index: 0 }]).unwrap();
+        s.apply(id, pdfcraft_engine::Edit::PasteObjects { page: 0, clip: std::sync::Arc::new(clip), offset: [0.0, 100.0] }).unwrap();
+        let blocks = s.get(id).unwrap().text_blocks(0);
+        assert_eq!(blocks.len(), 2, "{blocks:?}");
+        assert!(blocks.iter().all(|b| b.underlined), "both underlined: {:?}", blocks.iter().map(|b| (&b.text, b.underlined)).collect::<Vec<_>>());
+    }
+
     /// Thai edition: with "Dell Latitude 5440" open for typing ("Dell" red, "Latitude" green and
     /// bold), Italic for all of it makes every part italic and keeps "Latitude" bold. Each part
     /// was given the first part's weight: "Latitude" lost its bold, or was drawn in another face.
@@ -1506,6 +1687,7 @@ C", &picked
             look0: look_of(&block),
             family_chosen: false,
             size_chosen: false,
+            color_chosen: false,
             extras: Extras::default(),
             extras0: Extras::default(),
             typing_from: None,
@@ -1518,6 +1700,142 @@ C", &picked
         assert!(lines.iter().filter(|l| !l.text.trim().is_empty()).all(|l| l.italic), "all italic: {lines:?}");
         assert!(line("Latitude").bold && !line("Dell").bold && !line("5440").bold, "only Latitude bold: {lines:?}");
         assert_eq!((line("Dell").color, line("Latitude").color), (red, green), "colours kept: {lines:?}");
+    }
+
+    /// Thai edition: with "Dell" red and the rest black, red picked again for a selection running
+    /// from "Dell" into "Latitude" colours all of it red. The colour shown for the selection was
+    /// red, so the same red compared equal and nothing changed.
+    #[test]
+    fn the_colour_shown_picked_again_colours_the_whole_selection() {
+        let mut s = pdfcraft_engine::Session::new();
+        let pdf = s.create_from_images(&[("scan.png".into(), pdfcraft_engine::export::encode_png(2, 2, &[200; 16]).unwrap())]).unwrap();
+        let id = s.open("scan.pdf", None, pdf, None).unwrap();
+        let text = pdfcraft_engine::AddedText {
+            text: "Dell Latitude 5440".into(),
+            rect: [10.0, 10.0, 300.0, 30.0],
+            family: pdfcraft_engine::FontFamily::Times,
+            size: 14.0,
+            ..Default::default()
+        };
+        let red = [0.9, 0.1, 0.1];
+        let runs = vec![
+            pdfcraft_engine::TextRun { chars: 0..5, color: red, size: 14.0, ..Default::default() },
+            pdfcraft_engine::TextRun { chars: 5..18, color: [0.0; 3], size: 14.0, ..Default::default() },
+        ];
+        s.apply(id, pdfcraft_engine::Edit::AddStyledText { page: 0, text, runs }).unwrap();
+        let doc = s.get(id).unwrap();
+        let block = doc.text_blocks(0).remove(0);
+        let lines = doc.text_lines(0);
+        let mut look = look_of(&block);
+        look.color = red;
+        let mut ed = LineEditor {
+            selection: Some(0..13),
+            font_resource: None,
+            page: 0,
+            block: 0,
+            text: block.editor_text.clone(),
+            original: block.editor_text.clone(),
+            rect: Rect::NOTHING,
+            source_rect: block.rect.map(|v| v as f32),
+            multiline: false,
+            source: Some((block.clone(), lines)),
+            fonts: BTreeMap::new(),
+            overflow: false,
+            max_width: 400.0,
+            size: block.size as f32,
+            focus: true,
+            had_focus: false,
+            look: look.clone(),
+            look0: look,
+            family_chosen: false,
+            size_chosen: false,
+            color_chosen: false,
+            extras: Extras::default(),
+            extras0: Extras::default(),
+            typing_from: None,
+        };
+        assert!(!ed.has_changes(), "the red shown, not yet picked");
+        ed.choose_color();
+        assert!(ed.has_changes());
+        let style = ed.style();
+        s.apply(id, pdfcraft_engine::Edit::EditTextBlock { page: 0, block: 0, text: ed.text.clone(), style }).unwrap();
+        let lines = s.get(id).unwrap().text_lines(0);
+        let line = |w: &str| lines.iter().find(|l| l.text.contains(w)).unwrap_or_else(|| panic!("{w}: {lines:?}"));
+        assert_eq!(line("Latitude").color, red, "the whole selection is red: {lines:?}");
+        assert_eq!(line("5440").color, [0.0; 3], "past the selection stays black: {lines:?}");
+    }
+
+    /// Thai edition: an OCR row of English and Thai shows in Format text (and its preview) in the
+    /// face and size it is drawn in once recoloured. It showed the look it was read in, 8 pt
+    /// Helvetica, and came out in TH Sarabun PSK half again as large.
+    #[test]
+    fn an_ocr_rows_look_is_the_look_it_is_drawn_in() {
+        if pdfcraft_engine::FontFamily::Sarabun.craft(false, false).is_none() {
+            return; // built without craft-fonts
+        }
+        let mut s = pdfcraft_engine::Session::new();
+        let pdf = s.create_blank(595.0, 842.0, 1).unwrap();
+        let id = s.open("blank.pdf", None, pdf, None).unwrap();
+        let mut x = 100.0;
+        let words: Vec<pdfcraft_engine::ocr::PlacedWord> = ["Desktop", "computer", "สำหรับ", "Back", "Office"]
+            .iter()
+            .map(|t| {
+                let width = t.chars().count() as f64 * 4.4;
+                let w = pdfcraft_engine::ocr::PlacedWord {
+                    text: (*t).into(),
+                    origin: [x, 600.0],
+                    across: [width, 0.0],
+                    up: [0.0, 12.0],
+                    confidence: None,
+                    source: "t".into(),
+                };
+                x += width + 3.0;
+                w
+            })
+            .collect();
+        s.apply(id, pdfcraft_engine::Edit::AddOcrText { page: 0, words }).unwrap();
+        let doc = s.get(id).unwrap();
+        let target = pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::Text, index: 0 };
+        let shown = crate::restyle::look_of(doc, 0, target).unwrap().text;
+        let mut red = shown.clone();
+        red.color = [0.9, 0.1, 0.1];
+        let change = crate::restyle::change_between(&shown, &red, None);
+        let edit = crate::restyle::restyle_edit(doc, 0, &[target], &change, None).unwrap();
+        s.apply(id, edit).unwrap();
+        let drawn = s.get(id).unwrap().text_blocks(0).remove(0);
+        assert_eq!(shown.family, look_of(&drawn).family, "shown in the face it is drawn in: {drawn:?}");
+        assert!((shown.size - drawn.size).abs() <= drawn.size * 0.06, "shown at {} pt, drawn at {} pt", shown.size, drawn.size);
+    }
+
+    /// Thai edition: an OCR row read as words of several heights (marks above and below make a
+    /// word's box taller) has one look, the one it is drawn in: its words' read sizes are not
+    /// parts of their own. Taken as parts, boxes merged from OCR rows came out in sizes from
+    /// small to large, line by line, and split boxes and the preview likewise.
+    #[test]
+    fn an_ocr_rows_words_are_not_parts_of_their_own() {
+        let mut s = pdfcraft_engine::Session::new();
+        let pdf = s.create_blank(595.0, 842.0, 1).unwrap();
+        let id = s.open("blank.pdf", None, pdf, None).unwrap();
+        let words = [("แทนข้าพเจ้าจนเสร็จการ", 100.0, 110.0, 14.0), ("ข้าพเจ้ายอมรับผิดชอบในการที่ผู้รับมอบอำนาจ", 215.0, 230.0, 22.0)]
+            .iter()
+            .map(|(t, x, w, h)| pdfcraft_engine::ocr::PlacedWord {
+                text: (*t).into(),
+                origin: [*x, 600.0],
+                across: [*w, 0.0],
+                up: [0.0, *h],
+                confidence: None,
+                source: "t".into(),
+            })
+            .collect();
+        s.apply(id, pdfcraft_engine::Edit::AddOcrText { page: 0, words }).unwrap();
+        let doc = s.get(id).unwrap();
+        let blocks = doc.text_blocks(0);
+        let lines = doc.text_lines(0);
+        let block = blocks.iter().find(|b| b.text.contains("ยอมรับ")).unwrap();
+        assert!(block.invisible && block.lines.len() == 2, "{block:?}");
+        let sizes: Vec<f64> = block.lines.iter().filter_map(|i| lines.get(*i)).map(|l| l.size).collect();
+        assert!(sizes.windows(2).any(|w| (w[0] - w[1]).abs() > 1.0), "read at sizes apart: {sizes:?}");
+        assert_eq!(paragraph_runs(block, &lines), Vec::new(), "one look");
     }
 
     /// An app with one text document open, and an editor on its first paragraph.
@@ -1548,6 +1866,7 @@ C", &picked
             look0: look_of(&block),
             family_chosen: false,
             size_chosen: false,
+            color_chosen: false,
             extras: Extras::default(),
             extras0: Extras::default(),
             typing_from: None,
@@ -1835,6 +2154,7 @@ three"
             size: 12.0,
             family_chosen: false,
             size_chosen: false,
+            color_chosen: false,
             focus: true,
             had_focus: false,
             look: pdfcraft_engine::AddedText::default(),

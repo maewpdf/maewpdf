@@ -269,8 +269,15 @@ fn add_shaped_font(doc: &mut Document, fonts_res: &mut Dict, family: &str, style
     descriptor.set(b"Type".to_vec(), Object::name("FontDescriptor"));
     descriptor.set(b"FontName".to_vec(), Object::name(&format!("{plain}-{}", style.replace(' ', ""))));
     descriptor.set(b"FontFamily".to_vec(), Object::String(PdfString::literal(family.as_bytes().to_vec())));
-    descriptor.set(b"Flags".to_vec(), Object::Int(4));
-    descriptor.set(b"ItalicAngle".to_vec(), Object::Int(0));
+    // A bold face says so (Thai edition): its name alone isn't read for weight, so text redrawn
+    // in it (a part recoloured) was read as regular, and its next rewrite drew it regular.
+    let lower = style.to_ascii_lowercase();
+    let (bold, italic) = (lower.contains("bold"), lower.contains("italic") || lower.contains("oblique"));
+    descriptor.set(b"Flags".to_vec(), Object::Int(4 | if bold { 262_144 } else { 0 } | if italic { 64 } else { 0 }));
+    if bold {
+        descriptor.set(b"FontWeight".to_vec(), Object::Int(700));
+    }
+    descriptor.set(b"ItalicAngle".to_vec(), Object::Int(if italic { -12 } else { 0 }));
     font.set(b"FontDescriptor".to_vec(), Object::Ref(doc.add(Object::Dict(descriptor))));
     font.set(b"FontBBox".to_vec(), Object::Array(bbox.iter().map(|v| Object::Real(*v)).collect()));
     font.set(
@@ -750,8 +757,17 @@ pub(super) fn add_type3_font(doc: &mut Document, fonts_res: &mut Dict, face: &Cr
     descriptor.set(b"Type".to_vec(), Object::name("FontDescriptor"));
     descriptor.set(b"FontName".to_vec(), Object::name(&format!("{}-{}", face.family, face.style).replace(' ', "")));
     descriptor.set(b"FontFamily".to_vec(), Object::String(PdfString::literal(face.family.as_bytes().to_vec())));
-    descriptor.set(b"Flags".to_vec(), Object::Int(if face.family.contains("Mincho") { 6 } else { 4 }));
-    descriptor.set(b"ItalicAngle".to_vec(), Object::Int(0));
+    // A bold face says so (Thai edition), as above.
+    let lower = face.style.to_ascii_lowercase();
+    let (bold, italic) = (lower.contains("bold"), lower.contains("italic") || lower.contains("oblique"));
+    descriptor.set(
+        b"Flags".to_vec(),
+        Object::Int(if face.family.contains("Mincho") { 6 } else { 4 } | if bold { 262_144 } else { 0 } | if italic { 64 } else { 0 }),
+    );
+    if bold {
+        descriptor.set(b"FontWeight".to_vec(), Object::Int(700));
+    }
+    descriptor.set(b"ItalicAngle".to_vec(), Object::Int(if italic { -12 } else { 0 }));
     // PDF 1.7 tables 5.9 and 5.19: a Type 3 descriptor is indirect; Ascent/Descent may be omitted.
     font.set(b"FontDescriptor".to_vec(), Object::Ref(doc.add(Object::Dict(descriptor))));
     font.set(b"FontBBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(-300), Object::Int(1000), Object::Int(1000)]));

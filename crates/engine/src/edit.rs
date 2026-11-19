@@ -14,8 +14,8 @@ mod labels;
 mod run;
 
 pub use labels::{BATCH_LABELS, EDIT_LABELS};
-pub use run::editor_range;
 pub(crate) use run::{EditCtx, check_permission, run_edit, run_edit_page_image};
+pub use run::{editor_range, ocr_row_look};
 
 /// Edits that can be applied to a document. Page indices are 0-based.
 /// Thai edition: a part of a paragraph (characters `chars`, counted in its text) and its colour
@@ -676,6 +676,16 @@ pub enum Edit {
     },
     /// Move paragraph `block` of the page's own text (from `Document::text_blocks`) in front of or
     /// behind the rest, drawn exactly as it was (Thai edition: Arrange).
+    /// Thai edition: Merge text boxes: paragraphs `blocks` of `page` become one group, handled
+    /// together, each keeping its own text, look and place; `group: false` takes them out of
+    /// their group again.
+    GroupText {
+        page: usize,
+        blocks: Vec<usize>,
+        /// Added text boxes joining the group: each becomes text of the page where it is.
+        added: Vec<usize>,
+        group: bool,
+    },
     ArrangeParagraph {
         page: usize,
         block: usize,

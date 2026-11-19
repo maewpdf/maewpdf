@@ -143,6 +143,8 @@ fn stretch(phrase: &TextBlock, lines: &[TextLine], indices: &[usize]) -> Result<
         invisible: true,
         underlined: false,
         underlined_parts: Vec::new(),
+        group: first.group,
+        frame: None,
     })
 }
 

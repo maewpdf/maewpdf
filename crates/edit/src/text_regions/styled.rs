@@ -796,17 +796,21 @@ type Shaped = (Vec<u8>, pdfcraft_fonts::source_shaping::ShapedRun, String);
 fn shape_source(doc: &Document, fonts: &Dict, name: &str, text: &str) -> Result<Option<Shaped>, EditError> {
     match shape_own(doc, fonts, name, text) {
         Err(e) if text.chars().any(is_thai) => {
-            let family = fonts.get(name.as_bytes()).and_then(|f| doc.dict(f)).map(|d| Metrics::from_dict(doc, &d).base_font).unwrap_or_default();
-            thai_face(&family, text).map(Some).ok_or(e)
+            let own = fonts.get(name.as_bytes()).and_then(|f| doc.dict(f)).map(|d| Metrics::from_dict(doc, &d));
+            let family = own.as_ref().map(|m| m.base_font.clone()).unwrap_or_default();
+            // Its weight and slant as the font says them, not only as its name does (Thai
+            // edition): bold Thai written by Add text is named for its family alone.
+            let (bold, italic) = own.as_ref().map_or((false, false), |m| (m.bold, m.italic));
+            thai_face(&family, bold, italic, text).map(Some).ok_or(e)
         }
         other => other,
     }
 }
 
 /// A complete Thai document face for a source font that can't shape `text`, in its style.
-fn thai_face(base_font: &str, text: &str) -> Option<Shaped> {
+fn thai_face(base_font: &str, bold: bool, italic: bool, text: &str) -> Option<Shaped> {
     let lower = base_font.to_ascii_lowercase();
-    let (bold, italic) = (lower.contains("bold"), lower.contains("italic") || lower.contains("oblique"));
+    let (bold, italic) = (bold || lower.contains("bold"), italic || lower.contains("italic") || lower.contains("oblique"));
     let installed = pdfcraft_fonts::installed_family_like(base_font).and_then(|family| {
         let face = pdfcraft_fonts::installed_face(family, bold, italic)?;
         Some((face, pdfcraft_fonts::installed_families().get(usize::from(family))?.name.to_string()))
@@ -876,11 +880,14 @@ fn segment_underline_runs(
 ) -> Vec<(usize, f64, f64)> {
     let width_sum = widths.iter().copied().sum::<f64>();
     let width_scale = if width_sum > 1e-6 { segment_width / width_sum } else { 0.0 };
+    // Letters without widths of their own (Thai edition: a part set in another weight or slant,
+    // shaped as a run) share the run's width: their underline was drawn with no length at all.
+    let even = (width_sum <= 1e-6 && !widths.is_empty()).then(|| segment_width / widths.len() as f64);
     let mut cursor = x;
     let mut runs: Vec<(usize, f64, f64)> = Vec::new();
     for (offset, width) in widths.iter().enumerate() {
         let style_index = row_styles.and_then(|styles| styles.get(pos.saturating_add(offset))).and_then(|style| *style).unwrap_or(default_style);
-        let next = cursor + *width * width_scale;
+        let next = cursor + even.unwrap_or(*width * width_scale);
         match runs.last_mut() {
             Some((prev, _, to)) if *prev == style_index => *to = next,
             _ => runs.push((style_index, cursor, next)),
@@ -1088,6 +1095,10 @@ fn rewrite_anchor<'a>(
     drop.extend(members.iter().flat_map(|line| line.ops.iter().copied()));
     // The underlines drawn under them go with them (Thai edition).
     drop.extend(crate::text::underline::indexes(&crate::text::underline::own_underlines(ops, &members)));
+    // And those of the copies drawn over it, which go with it.
+    drop.extend(crate::text::coincident_underlines(ops, lines, &members));
+    // And the box it was given (Thai edition), written again with it.
+    drop.extend(crate::text::box_marks(ops, &members));
     let start = lead.ops.first().copied().unwrap_or(origin.bt_op);
     let split = ops
         .get(origin.bt_op..start)
@@ -1365,7 +1376,10 @@ pub(crate) fn rewrite_styled_block(
     let marked = kept.iter().all(|row| !*row);
     push_whole_paragraph_marker(&mut block_ops, marked, "BMC");
     let crop = p.crop(doc);
-    let centered = is_centred(block, lines, (crop[0] + crop[2]) / 2.0, first.size);
+    // Only as it was (Thai edition), as the plain path guesses: a paragraph given a width (a box
+    // of its own) is aligned as asked, left otherwise. A heading centred on the page was centred
+    // in its widened box, so widening it to the right moved its text right by half as much.
+    let centered = style.width.is_none() && style.frame.is_none() && is_centred(block, lines, (crop[0] + crop[2]) / 2.0, first.size);
     let source_leading = block
         .rows
         .windows(2)
@@ -1561,6 +1575,7 @@ pub(crate) fn rewrite_styled_block(
     }
     push_whole_paragraph_marker(&mut block_ops, marked, "EMC");
     block_ops.push(Op::new("Q", vec![]));
+    crate::text::wrap_in_marks(&mut block_ops, block.group, style.frame);
     let on_top = crate::lift_on_top(over, &mut block_ops);
     block_ops.extend(after.ops());
     if split {

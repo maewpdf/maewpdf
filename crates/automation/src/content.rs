@@ -426,12 +426,20 @@ impl Automation {
         let doc = self.doc(a)?;
         let info = doc.info.pages.get(page).ok_or_else(|| bad("the page no longer exists"))?;
         let objects = doc.editable_objects(page).map_err(failed)?;
+        let blocks = doc.text_blocks(page);
         let items = objects
             .iter()
             .map(|o| {
                 let rect = crate::comments::rect_to_view(info, o.rect.map(|v| v as f32));
-                json!({"kind":o.target.kind.as_str(),"index":o.target.index.saturating_add(1),"type":o.content_type,
-                "rect":rect.map(|v|(f64::from(v)*100.0).round()/100.0),"text":o.text})
+                let mut row = json!({"kind":o.target.kind.as_str(),"index":o.target.index.saturating_add(1),"type":o.content_type,
+                "rect":rect.map(|v|(f64::from(v)*100.0).round()/100.0),"text":o.text});
+                // Thai edition: the merged group (object_group) a paragraph is in.
+                if o.target.kind == pdfcraft_engine::ObjectKind::Text
+                    && let Some(g) = blocks.get(o.target.index).and_then(|b| b.group)
+                {
+                    row["group"] = json!(g);
+                }
+                row
             })
             .collect::<Vec<_>>();
         Ok(json!({"page":page+1,"generation":doc.edit_generation(),"count":items.len(),"objects":items}))
@@ -500,6 +508,32 @@ impl Automation {
         let count = targets.len();
         let mut result = self.apply(a, Edit::MoveObjects { page, objects: targets, offset })?;
         result["moved"] = json!(count);
+        Ok(result)
+    }
+
+    /// Thai edition: Merge text boxes. Paragraphs and added text boxes become one group, each
+    /// where it was, as it was; with `ungroup`, paragraphs leave their group.
+    pub(crate) fn object_group(&mut self, a: &Args) -> Result<Value> {
+        use pdfcraft_engine::ObjectKind;
+        let page = self.page(a)?;
+        let targets = self.object_targets(a, page)?;
+        let ungroup = a.opt_bool("ungroup")?.unwrap_or(false);
+        let mut blocks = Vec::new();
+        let mut added = Vec::new();
+        for t in &targets {
+            match t.kind {
+                ObjectKind::Text => blocks.push(t.index),
+                ObjectKind::Added if !ungroup => added.push(t.index),
+                ObjectKind::Added => return Err(bad("ungroup takes paragraphs (kind text) only")),
+                ObjectKind::Image => return Err(bad("only text can be merged: kind text or added text boxes")),
+            }
+        }
+        if !ungroup && targets.len() < 2 {
+            return Err(bad("select at least 2 text objects to merge"));
+        }
+        let count = targets.len();
+        let mut result = self.apply(a, Edit::GroupText { page, blocks, added, group: !ungroup })?;
+        result[if ungroup { "ungrouped" } else { "grouped" }] = json!(count);
         Ok(result)
     }
 

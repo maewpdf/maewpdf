@@ -4030,6 +4030,8 @@ fn save_live_shot(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
 /// beside a kept first row leaves the neighbour as its own paragraph on screen.
 #[test]
 fn the_live_editor_groups_a_repeated_step_and_keeps_the_neighbour() {
+    // It draws with the GPU, which only one test may use at a time: two at once crashed the run.
+    let _gpu = crate::gpu();
     let step = 27.6_f32;
     let repeated = format!(
         "BT /F1 12 Tf 72 700 Td (One) Tj ET BT /F1 12 Tf 72 {} Td (Two) Tj ET BT /F1 12 Tf 72 {} Td (Three) Tj ET",
@@ -4073,6 +4075,8 @@ fn the_live_editor_groups_a_repeated_step_and_keeps_the_neighbour() {
 /// Widening example 1 must not pull the heading into that box or split the paragraph under example 2.
 #[test]
 fn widening_example_one_keeps_the_heading_and_the_next_paragraph() {
+    // It draws with the GPU, which only one test may use at a time: two at once crashed the run.
+    let _gpu = crate::gpu();
     let body = "BT /F1 14 Tf 72 740 Td (1. Repeated step, no TL. Click Two.) Tj ET \
                 BT /F1 12 Tf 72 700 Td (One) Tj ET \
                 BT /F1 12 Tf 72 672.4 Td (Two) Tj ET \
@@ -4148,6 +4152,8 @@ fn widening_example_one_keeps_the_heading_and_the_next_paragraph() {
 /// The live width handle, after a row was added on top of the neighbour.
 #[test]
 fn resizing_the_live_box_keeps_the_neighbour() {
+    // It draws with the GPU, which only one test may use at a time: two at once crashed the run.
+    let _gpu = crate::gpu();
     let partial = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 410 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET \
                    BT /F1 12 Tf 14.4 TL 1 0 0 1 72 366.8 Tm (Neighbor stays.) Tj ET";
     let mut h = open_letter("partial.pdf", letter_text(partial));
@@ -4735,7 +4741,7 @@ fn check_existing_artwork(name: &'static str, bytes: Vec<u8>) {
     h.key_press_modifiers(Modifiers::SHIFT, Key::ArrowDown);
     h.run_steps(4);
     let nudged = h.state().session.get(id).unwrap().page_images(0)[0].rect;
-    assert!((nudged[0] - moved[0] - 1.0).abs() < 0.05 && (nudged[1] - moved[1] + 10.0).abs() < 0.05, "{moved:?} → {nudged:?}");
+    assert!((nudged[0] - moved[0] - 0.5).abs() < 0.05 && (nudged[1] - moved[1] + 10.0).abs() < 0.05, "{moved:?} → {nudged:?}");
     assert!((nudged[2] - nudged[0] - (moved[2] - moved[0])).abs() < 0.05, "nudging keeps the size");
     assert_eq!(h.state().views[0].current, 0, "the arrows moved the image, not the page");
     // Delete with the Delete key.
@@ -5333,7 +5339,7 @@ fn one_click_selects_a_paragraph_the_arrows_move_it_and_a_double_click_opens_it(
     h.key_press_modifiers(Modifiers::SHIFT, Key::ArrowUp);
     h.run_steps(4);
     let after = rect(&h);
-    assert!((after[0] - before[0] - 1.0).abs() < 0.01 && (after[1] - before[1] - 10.0).abs() < 0.01, "{before:?} → {after:?}");
+    assert!((after[0] - before[0] - 0.5).abs() < 0.01 && (after[1] - before[1] - 10.0).abs() < 0.01, "{before:?} → {after:?}");
     assert_eq!(dragged_paragraphs(&h)[0].text, "Page 1", "moving keeps the text");
     assert_eq!(h.state().views[0].current, 0, "the arrows moved the paragraph, not the page");
     // Still selected after the moves; a double click on it opens it for typing.
@@ -5345,6 +5351,46 @@ fn one_click_selects_a_paragraph_the_arrows_move_it_and_a_double_click_opens_it(
     double_click(&mut h, at);
     h.run_steps(3);
     assert_eq!(h.state().views[0].line_editor.as_ref().map(|e| e.text.as_str()), Some("Page 1"));
+}
+
+/// A paragraph on a cover box (Thai edition: the Cover tool places a picture under the page's
+/// text) is still selected by one click, not opened for typing: the box under it is added content,
+/// which the click used to find first.
+#[test]
+fn one_click_selects_a_paragraph_lying_on_a_cover_box() {
+    let mut h = harness(1, |_| {});
+    let id = h.state().views[0].id;
+    let white = pdfcraft_engine::export::encode_png(1, 1, &[255, 255, 255, 255]).unwrap();
+    h.state_mut()
+        .session
+        .apply(id, pdfcraft_engine::Edit::AddCover { page: 0, rect: [20.0, 110.0, 160.0, 170.0], bytes: std::sync::Arc::new(white) })
+        .unwrap();
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let at = egui::pos2(r.left() + 40.0 / 200.0 * r.width(), r.top() + (300.0 - 158.0) / 300.0 * r.height());
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    h.run_steps(3);
+    assert!(h.state().views[0].line_editor.is_none(), "one click selects, it doesn't open the paragraph");
+    h.get_by_label("Drag the selection to move it. Esc clears the selection.");
+    let before = dragged_paragraphs(&h)[0].rect;
+    h.key_press(Key::ArrowRight);
+    h.run_steps(4);
+    let after = dragged_paragraphs(&h)[0].rect;
+    assert!((after[0] - before[0] - 0.5).abs() < 0.01, "the arrow moved the paragraph: {before:?} → {after:?}");
+    // A double click on it, still selected, opens it for typing; the box under it is not taken.
+    let r = h.state().views[0].page_screen_rect(0).unwrap();
+    let at = egui::pos2(r.left() + (40.0 + 1.0) / 200.0 * r.width(), r.top() + (300.0 - 158.0) / 300.0 * r.height());
+    h.hover_at(at);
+    h.run_steps(1);
+    double_click(&mut h, at);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].line_editor.as_ref().map(|e| e.text.as_str()), Some("Page 1"));
+    assert!(h.state().views[0].image_selection.is_none(), "the cover box under it is not selected");
 }
 
 /// Delete removes a paragraph of the page's text selected with one click, as one undo step
@@ -5681,6 +5727,8 @@ fn delete_removes_a_mixed_selection_in_one_undo_step() {
 /// paragraph (here a colour), and moving away takes it back; nothing is applied.
 #[test]
 fn format_text_previews_what_the_pointer_rests_on() {
+    // It draws with the GPU, which only one test may use at a time: two at once crashed the run.
+    let _gpu = crate::gpu();
     let mut h = harness(1, |_| {});
     assert!(h.state_mut().execute("edit.edit_text"));
     h.run_steps(2);
@@ -5846,6 +5894,122 @@ fn dragging_a_paragraph_moves_it_and_its_edge_rewraps_it() {
     assert!(h.state().views[0].line_editor.is_none());
 }
 
+/// Thai edition: a one-line paragraph of the page dragged wider from its right edge, then taller
+/// from its bottom edge, keeps the box it was given; its text stays as it was, in its size. Its
+/// box snapped back to its text, so a user found it could not be stretched.
+#[test]
+fn a_paragraphs_box_stretches_and_stays() {
+    let mut h = harness(1, |_| {});
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let block = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().text_blocks(0)[0].clone()
+    };
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let k = r.width() / 200.0;
+    let screen = |x: f64, y: f64| egui::pos2(r.left() + x as f32 * k, r.top() + (300.0 - y as f32) * k);
+    let before = block(&h);
+    let edge = screen(before.rect[2], (before.rect[1] + before.rect[3]) / 2.0) + egui::vec2(2.0, 0.0);
+    drag(&mut h, edge, edge + egui::vec2(60.0 * k, 0.0));
+    let wide = block(&h);
+    let frame = wide.frame.expect("a box of its own");
+    assert!((frame[2] - frame[0] - (before.rect[2] - before.rect[0] + 60.0)).abs() < 3.0, "{:?} -> {frame:?}", before.rect);
+    assert_eq!((wide.text.as_str(), wide.size), (before.text.as_str(), before.size), "the text as it was");
+    assert!((wide.rect[0] - before.rect[0]).abs() < 0.5 && (wide.rect[3] - before.rect[3]).abs() < 0.5, "in its place");
+    // The bottom edge, in the middle of the box: taller.
+    let bottom = screen((frame[0] + frame[2]) / 2.0, frame[1]) + egui::vec2(0.0, 3.0);
+    for _ in 0..2 {
+        h.hover_at(bottom);
+        h.run_steps(2);
+    }
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::ResizeVertical, "the bottom edge is a grip");
+    drag(&mut h, bottom, bottom + egui::vec2(0.0, 30.0 * k));
+    let tall = block(&h);
+    let f = tall.frame.expect("still its own");
+    assert!((f[3] - f[1] - (frame[3] - frame[1] + 30.0)).abs() < 3.0 && (f[2] - f[0] - (frame[2] - frame[0])).abs() < 0.5, "{frame:?} -> {f:?}");
+    assert!(
+        (tall.rect[3] - before.rect[3]).abs() < 0.5 && (tall.size - before.size).abs() < 1e-6,
+        "the text where it was, its size kept: {:?}",
+        tall.rect
+    );
+    assert!(h.state().views[0].line_editor.is_none());
+}
+
+/// Thai edition: a paragraph of the page dragged onto another page goes there, where it was
+/// dropped, and leaves its own page, as one undo step; so does one selected first with a click.
+/// Moved by an offset on its own page, it went past that page's edge and vanished.
+#[test]
+fn a_paragraph_dragged_onto_another_page_goes_there() {
+    for select_first in [false, true] {
+        let mut h = harness(2, |app| app.set_option("zoom", "100").unwrap());
+        assert!(h.state_mut().execute("edit.edit_text"));
+        h.run_steps(2);
+        let texts = |h: &Harness<'static, PdfCraftApp>, page: usize| -> Vec<String> {
+            let s = h.state();
+            s.session.get(s.views[0].id).unwrap().text_blocks(page).into_iter().map(|b| b.text).collect()
+        };
+        assert_eq!(texts(&h, 1), ["Page 2"]);
+        let (p1, p2) = {
+            let v = &h.state().views[0];
+            (v.page_screen_rect(0).expect("page 1 on screen"), v.page_screen_rect(1).expect("page 2 on screen"))
+        };
+        let b = {
+            let s = h.state();
+            s.session.get(s.views[0].id).unwrap().text_blocks(1)[0].clone()
+        };
+        let k = p2.width() / 200.0;
+        let from =
+            egui::pos2(p2.left() + ((b.rect[0] + b.rect[2]) / 2.0) as f32 * k, p2.top() + (300.0 - ((b.rect[1] + b.rect[3]) / 2.0) as f32) * k);
+        if select_first {
+            click_at(&mut h, from);
+        }
+        let to = egui::pos2(p1.center().x, p1.top() + 60.0);
+        drag(&mut h, from, to);
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        assert!(texts(&h, 1).is_empty(), "left page 2 (selected first: {select_first}): {:?}", texts(&h, 1));
+        let on_one = doc.text_blocks(0);
+        let moved = on_one.iter().find(|b| b.text == "Page 2").unwrap_or_else(|| panic!("on page 1 (selected first: {select_first}): {on_one:?}"));
+        let k1 = p1.width() / 200.0;
+        let y = p1.top() + (300.0 - ((moved.rect[1] + moved.rect[3]) / 2.0) as f32) * k1;
+        assert!((y - to.y).abs() < 30.0, "where it was dropped: {y} vs {}", to.y);
+        assert_eq!(doc.can_undo(), Some("Move object"));
+    }
+}
+
+/// Thai edition: a double click on a grip of a box dragged wider fits it to its text again; the
+/// text stays where it was, in its size.
+#[test]
+fn a_double_click_on_a_grip_fits_the_box_to_its_text() {
+    let mut h = harness(1, |_| {});
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let block = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().text_blocks(0)[0].clone()
+    };
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let k = r.width() / 200.0;
+    let screen = |x: f64, y: f64| egui::pos2(r.left() + x as f32 * k, r.top() + (300.0 - y as f32) * k);
+    let before = block(&h);
+    let edge = screen(before.rect[2], (before.rect[1] + before.rect[3]) / 2.0) + egui::vec2(2.0, 0.0);
+    drag(&mut h, edge, edge + egui::vec2(60.0 * k, 0.0));
+    let wide = block(&h);
+    let f = wide.frame.expect("a box of its own");
+    let grip = screen(f[2], (f[1] + f[3]) / 2.0) + egui::vec2(2.0, 0.0);
+    for _ in 0..2 {
+        h.hover_at(grip);
+        h.run_steps(2);
+    }
+    double_click(&mut h, grip);
+    h.run_steps(4);
+    let fitted = block(&h);
+    assert_eq!(fitted.frame, None, "fitted to its text: {:?}", fitted.rect);
+    assert!((fitted.rect[0] - before.rect[0]).abs() < 0.5 && (fitted.rect[2] - before.rect[2]).abs() < 1.0, "{:?} -> {:?}", before.rect, fitted.rect);
+    assert_eq!((fitted.text.as_str(), fitted.size), (before.text.as_str(), before.size));
+}
+
 /// Press and release at `at` without moving.
 fn click_at(h: &mut Harness<'static, PdfCraftApp>, at: egui::Pos2) {
     h.hover_at(at);
@@ -5919,7 +6083,7 @@ fn arrow_keys_nudge_a_selected_image_instead_of_turning_the_page() {
     press(&mut h, Modifiers::SHIFT, Key::ArrowDown);
     let moved = rect(&h);
     let near = |a: f64, b: f64| (a - b).abs() < 0.01;
-    assert!(near(moved[0], before[0] + 1.0) && near(moved[1], before[1] - 10.0), "{before:?} → {moved:?}");
+    assert!(near(moved[0], before[0] + 0.5) && near(moved[1], before[1] - 10.0), "{before:?} → {moved:?}");
     assert!(near(moved[2] - moved[0], before[2] - before[0]), "moved, not resized");
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Move image"));
     assert_eq!(h.state().views[0].current, 0, "the arrows moved the image, not the page");
@@ -5963,7 +6127,7 @@ fn alt_arrows_navigate_instead_of_nudging_a_selected_image() {
     h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
     h.run_steps(2);
     let moved = rect(&h);
-    assert!((moved[0] - before[0] - 1.0).abs() < 0.01, "a plain → nudged a point: {before:?} → {moved:?}");
+    assert!((moved[0] - before[0] - 0.5).abs() < 0.01, "a plain → nudged half a point (Thai edition): {before:?} → {moved:?}");
 }
 
 /// A paragraph's edge and an open paragraph's frame are caught a few pixels either side of
@@ -6077,7 +6241,7 @@ fn an_open_paragraph_moves_by_its_frame_and_by_the_arrow_keys() {
     press(&mut h, Modifiers::SHIFT, Key::ArrowUp);
     let nudged = block(&h);
     assert_eq!(nudged.text, "Page 1");
-    assert!(near(nudged.rect[0], before.rect[0] + 1.0) && near(nudged.rect[1], before.rect[1] + 10.0), "{:?} → {:?}", before.rect, nudged.rect);
+    assert!(near(nudged.rect[0], before.rect[0] + 0.5) && near(nudged.rect[1], before.rect[1] + 10.0), "{:?} → {:?}", before.rect, nudged.rect);
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Move object"));
     assert_eq!(h.state().views[0].current, 0, "the arrows moved the paragraph, not the page");
 
@@ -6614,10 +6778,12 @@ fn a_quick_flick_on_either_edge_rewraps_the_paragraph() {
     flick(&mut h, edge, edge + egui::vec2(80.0 * k, 0.0));
     let text: Vec<String> = lines(&h).iter().map(|l| l.text.clone()).collect();
     assert_eq!(text, ["Page 1"], "widened by a fast drag that left the handle at once");
-    // Flick the left edge inward: it rewraps and its left side follows the pointer.
+    // Flick the left edge inward: it rewraps and its left side follows the pointer. Widened, the
+    // box keeps the width it was given (Thai edition), so it is narrowed from that.
     let b = block(&h);
-    let edge = screen(b.rect[0], grip_y(&b)) - egui::vec2(2.0, 0.0);
-    let inward = (b.rect[2] - b.rect[0] - 45.0) as f32;
+    let own = b.frame.unwrap_or(b.rect);
+    let edge = screen(own[0], grip_y(&b)) - egui::vec2(2.0, 0.0);
+    let inward = (own[2] - own[0] - 45.0) as f32;
     flick(&mut h, edge, edge + egui::vec2(inward * k, 0.0));
     let after = lines(&h);
     let text: Vec<String> = after.iter().map(|l| l.text.clone()).collect();
@@ -9026,6 +9192,12 @@ fn dragging_the_rotate_knob_past_the_page_edge_turns_the_picture() {
         h.hover_at(knob + (to - knob) * (k as f32 / 4.0));
         h.run_steps(1);
     }
+    // The picture turns on screen with the frame while the button is down (Thai edition): its
+    // pixels are ready to draw turned. Only the frame showed, the picture gone.
+    assert!(
+        h.state().views[0].image_drag_picture.as_ref().is_some_and(|(key, texture)| (key.1, key.2) == (0, 0) && texture.is_some()),
+        "the picture is drawn while it turns"
+    );
     h.drop_at(to);
     h.run_steps(4);
     let id = h.state().views[0].id;
@@ -12059,6 +12231,8 @@ fn affine_review_resize_uses_press_delta_and_affine_frame() {
 
 #[test]
 fn affine_review_cropped_rotation_preview_matches_saved_corners() {
+    // It draws with the GPU, which only one test may use at a time: two at once crashed the run.
+    let _gpu = crate::gpu();
     let matrix = [70.710678, 70.710678, -70.710678, 70.710678, 170.710678, 100.0];
     for (clip, rotation) in [(None, 0), (Some([100.0, 170.0, 241.421356, 241.421356]), 0), (Some([100.0, 170.0, 241.421356, 241.421356]), 90)] {
         let mut h = affine_review_harness(affine_review_image_fixture(matrix, clip, rotation));

@@ -2895,6 +2895,8 @@ fn fill_key(h: &mut Harness<'static, PdfCraftApp>, key: egui::Key) {
 
 #[test]
 fn fill_sign_enter_adds_lines_outside_click_commits_and_escape_cancels() {
+    // It draws with the GPU, which only one test may use at a time: two at once crashed the run.
+    let _gpu = crate::gpu();
     let shots = std::env::var_os("PDFCRAFT_FILL_SIGN_SHOTS").is_some();
     let _gpu = shots.then(gpu);
     let mut h = harness();

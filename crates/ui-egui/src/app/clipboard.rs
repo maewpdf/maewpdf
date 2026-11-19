@@ -98,14 +98,17 @@ impl PdfCraftApp {
             self.copy_objects(i, ctx, cut);
         }
         let text_selected = copy && self.views.get(i).and_then(|v| v.selected_text()).is_some_and(|t| !t.is_empty());
+        // Something else copied since the objects (Thai edition): ⌘V pastes it, not them. A text
+        // box copied after a coloured copy of the same text pasted the coloured copy again.
+        let mut copied_other = copy && !objects && self.copy_on_canvas(i, ctx, text_selected);
         if copy
             && !objects
-            && !self.copy_on_canvas(i, ctx, text_selected)
+            && !copied_other
             && let Some(sel) = self.views.get(i).and_then(|v| v.image_selection.clone())
             && let Some(id) = self.views.get(i).map(|v| v.id)
             && self.may_copy(id)
         {
-            self.copy_page_image(sel.page, sel.index);
+            copied_other = self.copy_page_image(sel.page, sel.index);
         }
         if cut
             && !objects
@@ -114,6 +117,11 @@ impl PdfCraftApp {
             && self.may_copy(id)
         {
             self.cut_page_image(sel.page, sel.index);
+            copied_other = true;
+        }
+        if copied_other {
+            self.object_clipboard = None;
+            self.object_clip_mark = ObjectClipMark::None;
         }
         if (paste || !pastes.is_empty()) && self.quick_tool == QuickTool::EditText && self.object_clipboard.is_some() && self.pastes_objects(&pastes)
         {
@@ -189,6 +197,7 @@ impl PdfCraftApp {
             ObjectClipMark::None
         };
         self.object_clipboard = Some(pdfcraft_engine::ObjectClipboard::new(clip));
+        self.object_copy_pass = ctx.cumulative_pass_nr();
         if cut && let Some(delete) = pdfcraft_engine::Edit::delete_objects(page, targets) {
             self.apply_edit(delete);
         }
@@ -579,6 +588,19 @@ impl PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         {
             false
+        }
+    }
+
+    /// Forget the copied objects once anything else is copied in a later pass (Thai edition): a
+    /// text field's copy, or a text box's, of the same words as a coloured copy pasted the
+    /// coloured copy again. Run at the end of the frame, so it sees this frame's copies.
+    pub(crate) fn forget_objects_copied_before(&mut self, ctx: &egui::Context) {
+        if self.object_clipboard.is_none() || ctx.cumulative_pass_nr() == self.object_copy_pass {
+            return;
+        }
+        if ctx.output(|o| o.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(_) | egui::OutputCommand::CopyImage(_)))) {
+            self.object_clipboard = None;
+            self.object_clip_mark = ObjectClipMark::None;
         }
     }
 

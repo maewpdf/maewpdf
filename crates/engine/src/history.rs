@@ -111,6 +111,7 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         | Edit::MovePageImageToPage { .. }
         | Edit::ArrangeContent { .. }
         | Edit::ArrangeParagraph { .. }
+        | Edit::GroupText { .. }
         | Edit::ReplaceImage { .. }
         | Edit::PasteContent { .. }
         | Edit::PasteObjects { .. }

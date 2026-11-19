@@ -77,6 +77,20 @@ fn run() -> Result<()> {
     write(&dir.join("pdfcraft.svg"), &master)?;
     write(&dir.join(format!("hicolor/scalable/apps/{ID}.svg")), &master)?;
     write(&dir.join("pdfcraft-small.svg"), &svg(256)?)?;
+
+    // The Windows PDF file icon, from its own SVG master (in the edition's amber theme since
+    // 2026-11-16), as packaging/icons.sh renders it where resvg's program is installed.
+    let doc_svg = dir.join("pdfcraft-document.svg");
+    let text = std::fs::read(&doc_svg).map_err(|e| format!("{}: {e}", doc_svg.display()))?;
+    let tree = resvg::usvg::Tree::from_data(&text, &resvg::usvg::Options::default()).map_err(|e| format!("{}: {e}", doc_svg.display()))?;
+    let mut doc_ico = Vec::new();
+    for s in [16u32, 20, 24, 32, 40, 48, 64, 128, 256] {
+        let mut pm = Pixmap::new(s, s).ok_or("canvas")?;
+        let k = s as f32 / tree.size().width().max(tree.size().height());
+        resvg::render(&tree, Transform::from_scale(k, k), &mut pm.as_mut());
+        doc_ico.push(png(&pm)?);
+    }
+    write(&dir.join("pdfcraft-document.ico"), &ico_file(&doc_ico)?)?;
     Ok(())
 }
 

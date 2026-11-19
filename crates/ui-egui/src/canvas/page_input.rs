@@ -457,7 +457,7 @@ fn tool_input(
 /// comment and Prepare selections its press acts on are left alone until its release; links still
 /// take theirs, as before.
 fn right_click(hits: &PageHits<'_>, under: &[crate::page_router::Hit], view: &mut DocView, p: Pos2, press_held: bool) -> Option<Owner> {
-    let context = hits.context_at(view, p, under);
+    let mut context = hits.context_at(view, p, under);
     // Delete page, Paste and Copy Image act where the menu opened, whoever takes the right-click.
     comments::anchor(hits.pcx, p, view);
     // The menu is what the right-click went to (Add text's is the page's), when that is selected:
@@ -465,6 +465,39 @@ fn right_click(hits: &PageHits<'_>, under: &[crate::page_router::Hit], view: &mu
     view.menu_for = context.filter(|_| !(hits.tool == QuickTool::AddText && hits.can_modify)).map(|o| (hits.page, o));
     if press_held {
         return context;
+    }
+    // A paragraph right-clicked in Edit text & images is its menu's (Thai edition), over the picture
+    // under it (a scan under its OCR text gave Copy image), and is selected first, as a click
+    // selects it, so the menu shows its Split and Arrange: unselected, the same box showed one menu
+    // or the other. Not one open for typing, nor one selected with others, whose menu is the
+    // selection's.
+    let paragraph = under.iter().rev().find_map(|h| match h.owner {
+        Owner::Paragraph { block, part } => Some((block, part)),
+        _ => None,
+    });
+    // A picture filling the page is the paper the text is on; a smaller one under text keeps the
+    // right-click, as before, for its own menu.
+    let page_picture = |index: usize| {
+        hits.images
+            .get(index)
+            .and_then(|im| im.visible_rect)
+            .is_some_and(|r| crate::edit_text_ui::fills_page(hits.xf, hits.xf.user_rect(hits.info, hits.page, r.map(|v| v as f32))))
+    };
+    if hits.tool == QuickTool::EditText
+        && context.is_none_or(|o| matches!(o, Owner::Picture { index, .. } if page_picture(index)))
+        && let Some((block, part)) = paragraph
+    {
+        let owner = Owner::Paragraph { block, part };
+        view.menu_for = Some((hits.page, owner));
+        let open = view.line_editor.as_ref().is_some_and(|e| e.page == hits.page && e.block == block);
+        let selected = view.objects.selection().is_some_and(|(page, objects)| {
+            page == hits.page
+                && objects.iter().any(|o| o.target == pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::Text, index: block })
+        });
+        if !open && !selected {
+            view.objects.select_paragraph_next(hits.page, block);
+        }
+        context = Some(owner);
     }
     // Add text takes every right-click on a page it can change, the Link tool those on a link, and a
     // Prepare field tool the whole page, as before: comments see none of them.
@@ -669,9 +702,15 @@ impl PageHits<'_> {
         // together.
         let picks_up = matches!(tool, QuickTool::Select | QuickTool::AddText | QuickTool::EditText);
         // An added picture is on the picture layer: over the selection, and not part of it, it takes
-        // the press from the selection and the paragraph under it (Thai edition).
+        // the press from the selection and the paragraph under it (Thai edition). A box drawn with
+        // Cover the background is not a picture here: it is one pixel of one colour stretched over
+        // its box (`comments::paint::cover_edit`), sent behind the page's text, and the text on it
+        // keeps its clicks (a double click on a paragraph selected on one opened the box instead).
         let added_picture = pictures.as_ref().is_some_and(|h| {
             let crate::page_router::Owner::Picture { index, .. } = h.owner else { return false };
+            if images.get(index).is_some_and(|image| image.width == 1 && image.height == 1) {
+                return false;
+            }
             let object = images.get(index).and_then(|image| image.object);
             added.iter().filter(|item| item.page == page).enumerate().any(|(k, item)| {
                 matches!(&item.content, pdfcraft_engine::AddedContent::Image(image) if Some(image.image) == object)

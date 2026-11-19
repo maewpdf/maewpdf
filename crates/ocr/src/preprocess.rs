@@ -361,7 +361,8 @@ fn inverse_quarter_turns(k: QuarterTurns, old_w: u32, old_h: u32) -> InverseTran
 }
 
 /// Estimate the skew of the text lines, in degrees (−5…5, positive: lines run downhill to the
-/// right). Method (documented, panic-free): for each candidate angle the ink is sheared into a
+/// right), to a twentieth of a degree. Method (documented, panic-free): for each candidate angle
+/// (every quarter degree, then every twentieth around the best) the ink is sheared into a
 /// row profile (`r = y − (x − cx)·tan φ`); the projection-profile score (Σ profile²) peaks
 /// where the shear realigns the lines. `None` — leave the page alone — when the image is under
 /// 64 px on a side, blank, the winner is under 0.1°, or the winner does not clearly beat
@@ -405,6 +406,20 @@ fn estimate_skew(image: &OcrImage) -> Option<f64> {
             best = (phi, s);
         }
         phi += 0.25;
+    }
+    // A finer look around the best quarter-degree, a twentieth of a degree apart (Thai edition):
+    // the scan itself is turned by the angle found, and a quarter-degree step left it up to an
+    // eighth of a degree askew (0.4 mm over a line across an A4 page).
+    let coarse = best.0;
+    for k in -4..=4 {
+        let phi = coarse + f64::from(k) * 0.05;
+        if k == 0 || phi.abs() > 5.0 + 1e-9 {
+            continue;
+        }
+        let s = score(phi);
+        if s > best.1 {
+            best = (phi, s);
+        }
     }
     let (angle, best_score) = best;
     if angle.abs() < 0.1 || best_score < 1.02 * score(0.0) {
@@ -743,6 +758,16 @@ mod tests {
         let src = white(31, 31);
         let p = preprocess(src, 300.0, &PreprocessOptions { auto_rotate: true, ..Default::default() }).unwrap();
         assert_eq!(p.inverse_transform, InverseTransform::identity());
+    }
+
+    /// The skew is found to a twentieth of a degree (Thai edition: the scan itself is turned by
+    /// it), not only to the nearest quarter.
+    #[test]
+    fn skew_is_found_to_a_twentieth_of_a_degree() {
+        for degrees in [1.3, -2.15, 0.85] {
+            let angle = estimate_skew(&sheared(degrees)).unwrap_or_else(|| panic!("{degrees}° should be found"));
+            assert!((angle - degrees).abs() <= 0.051, "{degrees}°: got {angle}");
+        }
     }
 
     /// Blank pages are inconclusive: every step leaves them alone.

@@ -278,6 +278,9 @@ pub struct AddedText {
     pub line_spacing: f64,
     /// Which way the text runs (Thai edition).
     pub direction: TextDirection,
+    /// The box keeps the height its `rect` gives when that is taller than its lines (Thai
+    /// edition): a box stretched from its top or bottom. Otherwise the height follows the lines.
+    pub fixed_height: bool,
 }
 
 /// Which way an added text runs (Thai edition).
@@ -387,6 +390,7 @@ impl Default for AddedText {
             underline: false,
             line_spacing: 0.0,
             direction: TextDirection::Horizontal,
+            fixed_height: false,
         }
     }
 }

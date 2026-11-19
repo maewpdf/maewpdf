@@ -19,7 +19,7 @@ pub use pdfcraft_ocr::{
     StrategyOutcome, Word, band_for, is_suspect, lines_from_json, low_confidence,
 };
 
-use crate::{DocId, Edit, EditError, Session};
+use crate::{DocId, Edit, EditError, ImageEdit, Session};
 
 pub mod dictionary;
 pub(crate) mod layer;
@@ -855,6 +855,45 @@ fn preprocess_options(settings: &OcrSettings) -> pdfcraft_ocr::preprocess::Prepr
     }
 }
 
+/// The lean, in degrees, up to which a recognised word is placed level (Thai edition): Thai pages
+/// are always straightened before reading (up to 5°), and a word placed at the lean found is
+/// turned text, which Edit text can't restyle.
+const LEVEL_LEAN: f64 = 5.5;
+/// The least lean, in degrees, for which a page's scan is turned level with its words.
+const STRAIGHTEN_FROM: f64 = 0.05;
+
+/// The edits that add `words` to `page` of `doc` (Thai edition). Words leaning together (a page
+/// straightened for reading) turn its scan level under them, the picture covering most of the
+/// page, so the page and its text are both straight: the scan by its drawing matrix alone (no
+/// pixel is resampled), the words carried with it about the same centre. Without such a scan the
+/// words are set level where they are.
+fn ocr_page_edits(doc: &crate::Document, page: usize, words: &[PlacedWord]) -> Vec<Edit> {
+    let lean = pdfcraft_ocr::common_lean(words, STRAIGHTEN_FROM, LEVEL_LEAN);
+    let scan = lean.and_then(|_| {
+        let crop = doc.info.pages.get(page)?.crop.map(f64::from);
+        let area = ((crop[2] - crop[0]) * (crop[3] - crop[1])).abs();
+        doc.page_images(page).into_iter().enumerate().find(|(_, im)| {
+            let r = im.visible_rect.unwrap_or(im.rect);
+            let (w, h) = ((r[2].min(crop[2]) - r[0].max(crop[0])).max(0.0), (r[3].min(crop[3]) - r[1].max(crop[1])).max(0.0));
+            !im.is_form && area > 0.0 && w * h >= 0.8 * area
+        })
+    });
+    let level = |w: &PlacedWord| w.clone().leveled(LEVEL_LEAN);
+    match (lean, scan) {
+        (Some(lean), Some((index, image))) => {
+            // `turn_by_degrees` turns clockwise: a lean anticlockwise is undone by as much clockwise.
+            let Some(turn) = pdfcraft_edit::turn_by_degrees(image.visible_rect.unwrap_or(image.rect), lean) else {
+                return vec![Edit::AddOcrText { page, words: words.iter().map(level).collect() }];
+            };
+            vec![
+                Edit::EditPageImage { page, index, change: ImageEdit::RotateBy(lean) },
+                Edit::AddOcrText { page, words: words.iter().map(|w| level(w).centre_moved(turn)).collect() },
+            ]
+        }
+        _ => vec![Edit::AddOcrText { page, words: words.iter().map(level).collect() }],
+    }
+}
+
 /// A page prepared for recognition: the image an engine reads, and what placing the words
 /// found in it needs.
 pub struct OcrShot {
@@ -938,6 +977,8 @@ impl OcrShot {
             );
             covered(bounds, &self.existing) < ALREADY_ON_PAGE
         });
+        // Words of a straightened page lean with its scan here; applying them turns the scan level
+        // with them (Thai edition, [`Session::apply_ocr`]).
         let words = fresh.into_iter().map(|w| PlacedWord::place(w, to_user)).collect::<Vec<_>>();
         let mut notes = outcome.notes;
         // Only visible editable output needs display glyphs. Searchable output preserves
@@ -1016,8 +1057,8 @@ impl Session {
 
     /// Add the words found by [`OcrJob::run`] as one undoable step. Returns the number of words.
     pub fn apply_ocr(&mut self, id: DocId, found: &[OcrPage]) -> Result<usize, EditError> {
-        let edits: Vec<Edit> =
-            found.iter().filter(|p| !p.words.is_empty()).map(|p| Edit::AddOcrText { page: p.page, words: p.words.clone() }).collect();
+        let doc = self.get(id).ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid("the document is no longer open".into())))?;
+        let edits: Vec<Edit> = found.iter().filter(|p| !p.words.is_empty()).flat_map(|p| ocr_page_edits(doc, p.page, &p.words)).collect();
         let words = found.iter().map(|p| p.words.len()).sum();
         if !edits.is_empty() {
             self.apply(id, Edit::Batch { label: "Recognize text".into(), edits })?;
@@ -1083,7 +1124,11 @@ impl Session {
         let page_words: Vec<Vec<PlacedWord>> = (0..doc.info.pages.len())
             .map(|p| {
                 let Some(info) = doc.info.pages.get(p) else { return Vec::new() };
-                found.iter().find(|f| f.page == p).map(|f| f.words.iter().map(|w| editable_word(w, info)).collect()).unwrap_or_default()
+                found
+                    .iter()
+                    .find(|f| f.page == p)
+                    .map(|f| f.words.iter().map(|w| editable_word(&w.clone().leveled(LEVEL_LEAN), info)).collect())
+                    .unwrap_or_default()
             })
             .collect();
         layer::validate_words(page_words.iter().flatten()).map_err(|e| e.to_string())?;
@@ -2091,6 +2136,62 @@ mod tests {
         s.apply(id, Edit::AddOcrText { page: 0, words: vec![second] }).unwrap();
         let extracted = crate::tests::page_texts(&s, id)[0].clone();
         assert!(extracted.contains(&text) && extracted.contains("另一行"), "{extracted}");
+    }
+
+    /// Words leaning 2° together on a scanned page (a page straightened for reading, Thai
+    /// edition) turn the scan level under them as they go on, in the same undo step: the scan's
+    /// drawing turns by 2° clockwise, and each word is set level at its centre carried with it.
+    /// Undo puts the scan back as it was.
+    #[test]
+    fn leaning_words_turn_their_scan_level() {
+        let mut s = Session::new();
+        let png = crate::export::encode_png(600, 800, &vec![200; 600 * 800 * 4]).unwrap();
+        let pdf = s.create_from_images(&[("scan.png".into(), png)]).unwrap();
+        let id = s.open("scan.pdf", None, pdf, None).unwrap();
+        let info = s.get(id).unwrap().info.pages[0].clone();
+        assert!(info.width > 300.0 && info.height > 400.0, "a page the words fit: {info:?}");
+        let before = s.get(id).unwrap().page_images(0)[0].matrix;
+        assert!(before[1].abs() < 1e-9 && before[2].abs() < 1e-9, "upright to begin with: {before:?}");
+        let (sin, cos) = 2.0f64.to_radians().sin_cos();
+        let word = |x: f64, y: f64| PlacedWord {
+            text: "word".into(),
+            origin: [x, y],
+            across: [60.0 * cos, 60.0 * sin],
+            up: [-12.0 * sin, 12.0 * cos],
+            confidence: None,
+            source: "test".into(),
+        };
+        let words = vec![word(80.0, 300.0), word(200.0, 304.0), word(80.0, 200.0)];
+        let page = OcrPage { page: 0, words: words.clone(), already_on_page: 0, skipped: None, notes: Vec::new() };
+        assert_eq!(s.apply_ocr(id, &[page]).unwrap(), 3);
+        let doc = s.get(id).unwrap();
+        let image = &doc.page_images(0)[0];
+        let m = image.matrix;
+        let turned = (-m[1]).atan2(m[0]).to_degrees();
+        assert!((turned - 2.0).abs() < 1e-6, "the scan turned 2° clockwise: {m:?}");
+        assert!(crate::tests::page_texts(&s, id)[0].contains("word"));
+        assert_eq!(s.get(id).unwrap().can_undo(), Some("Recognize text"), "one step");
+        s.undo(id).unwrap();
+        assert_eq!(s.get(id).unwrap().page_images(0)[0].matrix, before, "undo puts the scan back");
+    }
+
+    /// Words that lean on a page with no scan under them are set level where they are.
+    #[test]
+    fn leaning_words_without_a_scan_are_set_level() {
+        let mut s = Session::new();
+        let id = s.open("src.pdf", None, Arc::new(fixture(1)), None).unwrap();
+        let (sin, cos) = 1.5f64.to_radians().sin_cos();
+        let word = PlacedWord {
+            text: "abc".into(),
+            origin: [50.0, 300.0],
+            across: [40.0 * cos, 40.0 * sin],
+            up: [-10.0 * sin, 10.0 * cos],
+            confidence: None,
+            source: "t".into(),
+        };
+        let edits = ocr_page_edits(s.get(id).unwrap(), 0, std::slice::from_ref(&word));
+        let [Edit::AddOcrText { words, .. }] = edits.as_slice() else { panic!("{edits:?}") };
+        assert_eq!(words[0].across[1], 0.0, "level: {:?}", words[0].across);
     }
 
     #[test]

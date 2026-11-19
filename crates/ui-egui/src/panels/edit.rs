@@ -385,7 +385,10 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         if out.size_committed {
             ed.choose_size(ed.look.size);
         }
-        let mut changed = out.changed;
+        if out.colour_picked {
+            ed.choose_color();
+        }
+        let mut changed = out.changed || out.colour_picked;
         if let Some(script) = out.script {
             changed |= crate::edit_text_ui::toggle_script(&mut ed.text, &mut ed.selection, script);
         }
@@ -537,6 +540,11 @@ fn selected_boxes_format(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) -
         _ => Vec::new(),
     };
     let runs_shown = runs.clone();
+    // OCR rows among the boxes: their invisible text reads as black (Thai edition; see below).
+    let ocr_rows = {
+        let blocks = doc.text_blocks(page);
+        targets.iter().any(|t| t.kind == pdfcraft_engine::ObjectKind::Text && blocks.get(t.index).is_some_and(|b| b.invisible))
+    };
     painter_button(app, ui, i, &first.text, runs, first.source_font.as_deref());
     let mut look = first.text.clone();
     // Its underline shows as it is, so it can be turned off here too (Thai edition).
@@ -564,9 +572,16 @@ fn selected_boxes_format(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) -
     let underline = (extras.underline != extras0.underline).then_some(extras.underline);
     let mut change = crate::restyle::change_between(&first.text, &look, underline);
     // Thai edition: the colour shown for a paragraph of several colours is its first part's, so
-    // a swatch of that colour clicked still colours all of it.
-    if change.is_empty() && out.colour_picked && !runs_shown.is_empty() {
+    // a swatch of that colour clicked still colours all of it. An OCR row's invisible text reads
+    // as black, and black picked for it draws it in black: it changed nothing, and another colour
+    // had to be picked first.
+    if change.is_empty() && out.colour_picked && (!runs_shown.is_empty() || ocr_rows) {
         change.color = Some(look.color);
+    }
+    // An alignment clicked counts though it is the one shown (Thai edition): a row left of
+    // centre in its box shows as left, and Align left takes it to the box's left edge.
+    if change.is_empty() && out.align_picked {
+        change.align = Some(look.align);
     }
     if change.is_empty() {
         return true;

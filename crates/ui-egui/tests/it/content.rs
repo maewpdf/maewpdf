@@ -2390,3 +2390,87 @@ fn escape_closing_a_dialog_over_added_text_being_typed_keeps_the_typing() {
     let added = added(&h).iter().any(|a| matches!(&a.content, pdfcraft_engine::AddedContent::Text(t) if t.text.contains("Reviewed")));
     assert!(open || added, "the typing stays");
 }
+
+/// Thai edition: a selected text box has a grip at the middle of each side as well as at its
+/// corners. A side's grip moves that side alone: right wider, the height kept; bottom lower, the
+/// width kept; left and top the same. It could only be resized from a corner, both ways at once.
+#[test]
+fn a_text_box_stretches_from_the_middle_of_each_side() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let text = pdfcraft_engine::AddedText { rect: [60.0, 200.0, 160.0, 230.0], text: "IT Manager".into(), size: 14.0, ..Default::default() };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));
+    h.run_steps(3);
+    h.state_mut().views[0].content.selected = Some((0, 0));
+    h.run_steps(2);
+    let rect = |h: &Harness<'static, PdfCraftApp>| added(h)[0].content.rect();
+    let drag = |h: &mut Harness<'static, PdfCraftApp>, from: Pos2, by: egui::Vec2, icon: egui::CursorIcon| {
+        h.hover_at(from);
+        h.run_steps(2);
+        assert_eq!(h.output().platform_output.cursor_icon, icon, "the pointer over {from:?}");
+        h.drag_at(from);
+        h.run_steps(1);
+        for k in 1..=4 {
+            h.hover_at(from + by * (k as f32 / 4.0));
+            h.run_steps(1);
+        }
+        h.drop_at(from + by);
+        h.run_steps(3);
+    };
+    let near = |a: f64, b: f64| (a - b).abs() < 1.0;
+    let r0 = rect(&h);
+    let s = item_on_screen(&h, r0).expand(1.0);
+    drag(&mut h, s.right_center(), egui::vec2(60.0, 0.0), egui::CursorIcon::ResizeHorizontal);
+    let r1 = rect(&h);
+    assert!(r1[2] > r0[2] + 20.0 && near(r1[0], r0[0]) && near(r1[1], r0[1]) && near(r1[3], r0[3]), "wider only: {r0:?} -> {r1:?}");
+    assert_eq!(h.state().views[0].content.selected, Some((0, 0)), "still selected");
+    let s = item_on_screen(&h, r1).expand(1.0);
+    drag(&mut h, s.center_bottom(), egui::vec2(0.0, 50.0), egui::CursorIcon::ResizeVertical);
+    let r2 = rect(&h);
+    assert!(r2[1] < r1[1] - 15.0 && near(r2[0], r1[0]) && near(r2[2], r1[2]) && near(r2[3], r1[3]), "taller only: {r1:?} -> {r2:?}");
+    let s = item_on_screen(&h, r2).expand(1.0);
+    drag(&mut h, s.left_center(), egui::vec2(-30.0, 0.0), egui::CursorIcon::ResizeHorizontal);
+    let r3 = rect(&h);
+    assert!(r3[0] < r2[0] - 10.0 && near(r3[2], r2[2]) && near(r3[1], r2[1]) && near(r3[3], r2[3]), "left side out: {r2:?} -> {r3:?}");
+    let s = item_on_screen(&h, r3).expand(1.0);
+    drag(&mut h, s.center_top(), egui::vec2(0.0, -30.0), egui::CursorIcon::ResizeVertical);
+    let r4 = rect(&h);
+    assert!(r4[3] > r3[3] + 10.0 && near(r4[1], r3[1]) && near(r4[0], r3[0]) && near(r4[2], r3[2]), "top side up: {r3:?} -> {r4:?}");
+    if let pdfcraft_engine::AddedContent::Text(t) = &added(&h)[0].content {
+        assert_eq!(t.text, "IT Manager");
+    }
+}
+
+/// Thai edition, as a user did it: Thai text added with Ctrl+T, converted to page text, then
+/// moved. Each glyph moves, and the paragraph's box moves with them, as wide as before. Its box
+/// ran a move's length wide (21 points became 116), and its frame and text came apart; resizing
+/// it first (which rewrites it) was the only way round.
+#[test]
+fn thai_text_converted_to_page_text_moves_whole() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let text = pdfcraft_engine::AddedText { rect: [60.0, 200.0, 160.0, 230.0], text: "กกกก".into(), size: 14.0, ..Default::default() };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::ReleaseContent { page: 0, index: 0 }));
+    h.run_steps(3);
+    let paragraph = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        let d = s.session.get(s.views[0].id).unwrap();
+        let objects = d.editable_objects(0).unwrap();
+        let o = objects.iter().find(|o| o.text.as_deref().is_some_and(|t| t.contains('ก'))).expect("the paragraph");
+        (o.target, o.rect)
+    };
+    let (target, before) = paragraph(&h);
+    let offset = {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().object_move_offset(0, [100.0, 30.0]).unwrap()
+    };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::MoveObjects { page: 0, objects: vec![target], offset }));
+    h.run_steps(3);
+    let (_, after) = paragraph(&h);
+    let near = |a: f64, b: f64| (a - b).abs() < 0.5;
+    assert!(near(after[0], before[0] + 100.0) && near(after[2], before[2] + 100.0), "moved whole, as wide as before: {before:?} -> {after:?}");
+    assert!(near(after[1], before[1] - 30.0), "{before:?} -> {after:?}");
+}

@@ -113,3 +113,33 @@ fn tests_and_embedders_without_the_offer_never_see_them_and_help_opens_them() {
     assert_eq!(h.state().dialog, Some(Dialog::EditingTips));
     h.get_by_label("Got it");
 }
+
+/// The tips come in four tabs: editing text first, then layout (rulers and guides), scans and OCR
+/// (cleaning a scan up), then general (the theme, zooming, moving around).
+#[test]
+fn the_tips_tabs_show_layout_and_general_tips() {
+    let mut h = harness(false, "{}");
+    open(&mut h);
+    assert!(h.state_mut().execute("help.editing_tips"));
+    crate::support::settle(&mut h);
+    h.get_by_label("Nudge");
+    assert!(h.query_by_label("Guides").is_none(), "one tab at a time");
+    // The accessibility click: kittest's pointer click on these tabs is not seen as a click
+    // (it is in the app, checked through the control channel).
+    h.get_by_label("Layout").click_accesskit();
+    crate::support::settle(&mut h);
+    h.get_by_label("Rulers");
+    h.get_by_label("Guides");
+    assert!(h.query_by_label("Nudge").is_none());
+    h.get_by_label("Scans & OCR").click_accesskit();
+    crate::support::settle(&mut h);
+    h.get_by_label("Enhance scanned file");
+    h.get_by_label("Shadows and specks");
+    h.get_by_label("General").click_accesskit();
+    crate::support::settle(&mut h);
+    h.get_by_label("Light or dark");
+    h.get_by_label("Move around the page");
+    h.get_by_label("Got it").click();
+    crate::support::settle(&mut h);
+    assert_eq!(h.state().dialog, None);
+}
