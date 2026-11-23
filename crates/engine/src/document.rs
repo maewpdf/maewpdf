@@ -389,6 +389,13 @@ impl Document {
     }
 
     /// Edit a PDF ▸ Edit text: the paragraphs on `page` (0-based).
+    /// Thai edition: whether page `page` has text of its own rather than only text MaewPDF put
+    /// there (typed or merged text boxes, marks): see `pdfcraft_edit::own_text`. `true` when it
+    /// can't be told, so an unsure answer leaves the page alone.
+    pub fn page_has_own_text(&self, page: usize) -> bool {
+        self.editor.as_ref().is_none_or(|e| pdfcraft_edit::page_has_own_text(&e.cos, page).unwrap_or(true))
+    }
+
     pub fn text_blocks(&self, page: usize) -> Vec<pdfcraft_edit::TextBlock> {
         self.editor.as_ref().and_then(|e| e.text_blocks(page).ok()).map(|b| b.as_ref().clone()).unwrap_or_default()
     }

@@ -297,18 +297,23 @@ fn editing_a_scan_with_a_comment_over_it_recognizes_the_picture() {
 
 /// A born-digital page with a full-page background picture and real text (a flyer, a slide
 /// export) must not change just because Edit is turned on (maintainer review of #1609).
+/// Thai edition: the page's text is real page text here (a text page with a picture over it); a
+/// text box typed onto a scan is not the page's own text (see the next test).
 #[test]
 fn editing_a_page_with_text_over_a_background_picture_changes_nothing() {
     let hybrid = {
         let mut s = Session::new();
-        let id = s.open("scan.pdf", None, std::sync::Arc::new(scan()), None).unwrap();
+        let id = s.open("flyer.pdf", None, std::sync::Arc::new(text_page()), None).unwrap();
         let (w, h) = {
             let p = &s.get(id).unwrap().info.pages[0];
             (p.width as f64, p.height as f64)
         };
-        let note =
-            AddedText { rect: [w * 0.1, h * 0.75, w * 0.9, h * 0.85], text: "Invoice reference 4711".into(), size: 18.0, ..Default::default() };
-        s.apply(id, Edit::AddText { page: 0, text: note }).unwrap();
+        let picture = {
+            let scan_id = s.open("scan.pdf", None, std::sync::Arc::new(scan()), None).unwrap();
+            export::Exporter::new(s.get(scan_id).unwrap()).png(0, 72.0).unwrap()
+        };
+        s.apply(id, Edit::AddImage { page: 0, rect: Some([0.0, 0.0, w, h]), name: "background.png".into(), bytes: std::sync::Arc::new(picture) })
+            .unwrap();
         s.save_bytes(id).unwrap().to_vec()
     };
     let mut h = edit_harness(hybrid);
@@ -321,6 +326,45 @@ fn editing_a_page_with_text_over_a_background_picture_changes_nothing() {
     // And Edit says nothing about recognizing: no progress, no "0 words ... already had text".
     let toast = h.state().toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
     assert!(!toast.contains("ecogniz") && !toast.contains("already had text"), "{toast:?}");
+}
+
+/// Thai edition: a scan someone typed a text box onto before Edit read it is still a scan. Edit
+/// reads it (the owner met this often: the page was never read, even after reopening), and the
+/// typed words are not read into the layer a second time. Merged into the page (Merge text boxes),
+/// the box still doesn't make the scan a page with text of its own.
+#[test]
+fn a_scan_with_a_typed_text_box_is_still_recognized() {
+    if !pdfcraft_engine::ocr::available() {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    for merge in [false, true] {
+        let typed = {
+            let mut s = Session::new();
+            let id = s.open("scan.pdf", None, std::sync::Arc::new(scan()), None).unwrap();
+            let (w, h) = {
+                let p = &s.get(id).unwrap().info.pages[0];
+                (p.width as f64, p.height as f64)
+            };
+            let note =
+                AddedText { rect: [w * 0.1, h * 0.05, w * 0.9, h * 0.12], text: "Typed reference 4711".into(), size: 18.0, ..Default::default() };
+            s.apply(id, Edit::AddText { page: 0, text: note }).unwrap();
+            if merge {
+                s.apply(id, Edit::ReleaseContent { page: 0, index: 0 }).unwrap();
+            }
+            s.save_bytes(id).unwrap().to_vec()
+        };
+        let mut h = edit_harness(typed);
+        let id = h.state().active_ids().unwrap().1;
+        assert!(h.state_mut().execute("edit.edit_text"));
+        h.run_steps(6);
+        assert!(h.state().ocr_run.is_none(), "finished");
+        let doc = h.state().session.get(id).unwrap();
+        assert_eq!(doc.can_undo(), Some("Recognize text"), "merged: {merge}");
+        let invisible: Vec<String> = doc.text_blocks(0).iter().filter(|b| b.invisible).map(|b| b.editor_text.clone()).collect();
+        assert!(invisible.iter().any(|t| t.contains("scanned")), "the scan's words are read: {invisible:?}");
+        assert!(!invisible.iter().any(|t| t.contains("4711")), "the typed words are not read again: {invisible:?}");
+    }
 }
 
 /// A page that is not a scan when Edit looks at it is looked at again after the document changes:

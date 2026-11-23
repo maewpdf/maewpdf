@@ -240,6 +240,8 @@ fn scaled_layers(doc: &Document, list: &[Object], fit: Fit) -> Result<Vec<Entry>
         if tag.as_deref() == Some(ADDED_TAG) {
             dict.remove(b"PCMark");
             dict.remove(b"PCAdded");
+            // Still MaewPDF's text, not the page's own (`crate::own_text`).
+            dict.set(crate::own_text::MERGED_KEY.to_vec(), Object::Bool(true));
         }
         out.push(Entry::New(Stream::flate(dict, &data)));
         i += 1;

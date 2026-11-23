@@ -312,6 +312,9 @@ pub fn release_content(doc: &mut Document, page: usize, index: usize) -> Result<
     };
     s.dict.remove(b"PCMark");
     s.dict.remove(b"PCAdded");
+    // Thai edition: still MaewPDF's text, not the page's own, to Edit's scan check
+    // (`crate::own_text`); it changes nothing about how the text is read or edited.
+    s.dict.set(crate::own_text::MERGED_KEY.to_vec(), Object::Bool(true));
     doc.set(a.obj, Object::Stream(s));
     Ok(())
 }

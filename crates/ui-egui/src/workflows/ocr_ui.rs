@@ -192,6 +192,8 @@ struct ScanToRead {
     page: usize,
     /// The document's edit generation when it was judged.
     generation: u64,
+    /// Thai edition: the page has text of its own, not just text MaewPDF put there.
+    own_text: bool,
 }
 
 /// Files to recognize, by name, and the settings they were chosen with.
@@ -460,6 +462,12 @@ impl PdfCraftApp {
         }
         self.views[scan.view].auto_ocr_tried.insert(scan.page);
         auto_settings(&mut settings);
+        // Thai edition: a scan whose only text is what was typed onto it in MaewPDF (a text box,
+        // merged or not) is still a scan. It is read, and only the words not already there are
+        // added; before, the typed text kept it from ever being read, even after reopening.
+        if !scan.own_text {
+            settings.skip_text_pages = false;
+        }
         self.start_ocr_pages(scan.doc, &[scan.page], settings, true);
     }
 
@@ -530,7 +538,8 @@ impl PdfCraftApp {
             self.views[view].auto_ocr_skipped.insert(page, generation);
             return None;
         }
-        Some(ScanToRead { view, doc, page, generation })
+        let own_text = document.page_has_own_text(page);
+        Some(ScanToRead { view, doc, page, generation, own_text })
     }
 
     /// Recognize `pages` (0-based; empty = all) of document `id` in the background.

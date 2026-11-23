@@ -88,6 +88,9 @@ mod place;
 // Thai edition: Resize pages (a new paper size, the content scaled to fit).
 pub mod resize;
 pub use resize::{PageSize, resize_pages};
+// Thai edition: whether a page's text is its own or MaewPDF's (Edit's scan check).
+pub mod own_text;
+pub use own_text::page_has_own_text;
 
 pub use apply::{add_background, add_header_footer, add_watermark, marks_present, remove_marks};
 #[cfg(test)]

@@ -242,3 +242,54 @@ fn text_boxes_become_part_of_the_resized_page() {
     assert!(text::text_blocks(&doc, 0).unwrap().iter().any(|b| b.editor_text.contains("Box")), "the box's text is the page's text");
     assert_eq!(depth_at_end(&doc, 0), 0);
 }
+
+// Thai edition: `own_text`, Edit's scan check.
+
+/// A page that only draws a picture (a scan), as `image_page` builds one.
+fn scan_page() -> Document {
+    let mut doc = text_page("q 600 0 0 800 0 0 cm /Im0 Do Q");
+    let mut image = Dict::new();
+    image.set(b"Type".to_vec(), Object::name("XObject"));
+    image.set(b"Subtype".to_vec(), Object::name("Image"));
+    image.set(b"Width".to_vec(), Object::Int(1));
+    image.set(b"Height".to_vec(), Object::Int(1));
+    image.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    image.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    let image = doc.add(Object::Stream(Stream::from_raw(image, vec![255])));
+    let page = pdfcraft_model::pages(&doc)[0].clone();
+    let mut resources = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().unwrap().clone();
+    let mut xobjects = Dict::new();
+    xobjects.set(b"Im0".to_vec(), Object::Ref(image));
+    resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+    doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(resources))).unwrap();
+    doc
+}
+
+#[test]
+fn a_scan_with_only_maewpdf_text_has_no_text_of_its_own() {
+    let mut doc = scan_page();
+    assert!(!page_has_own_text(&doc, 0).unwrap(), "a picture alone");
+    let typed = || Content::Text(AddedText { rect: [72.0, 300.0, 300.0, 340.0], text: "Typed".into(), ..AddedText::default() });
+    add_content(&mut doc, 0, &typed()).unwrap();
+    assert!(!page_has_own_text(&doc, 0).unwrap(), "a typed text box is MaewPDF's");
+    release_content(&mut doc, 0, 0).unwrap();
+    assert!(!page_has_own_text(&reopen(&doc), 0).unwrap(), "merged, still MaewPDF's");
+    add_content(&mut doc, 0, &typed()).unwrap();
+    resize_pages(&mut doc, &[0], size(300.0, 400.0)).unwrap();
+    assert!(!page_has_own_text(&reopen(&doc), 0).unwrap(), "merged by a resize, still MaewPDF's");
+    let mut hf = HeaderFooter::default();
+    hf.text[1] = "Header".into();
+    add_header_footer(&mut doc, &[0], &hf, false, &cx()).unwrap();
+    assert!(!page_has_own_text(&doc, 0).unwrap(), "a header is MaewPDF's");
+    stamp(&mut doc, 0, "OCR", b"BT /PCHelv 10 Tf 3 Tr 72 700 Td (scan) Tj ET".to_vec()).unwrap();
+    assert!(page_has_own_text(&doc, 0).unwrap(), "an OCR layer: the page has been read");
+}
+
+#[test]
+fn real_page_text_and_forms_count_as_its_own() {
+    assert!(page_has_own_text(&mixed_region_page(), 0).unwrap());
+    // A form XObject may hold text: counted, so the page is left alone.
+    let doc = text_page("q /Fm0 Do Q");
+    assert!(page_has_own_text(&doc, 0).unwrap());
+    assert!(matches!(page_has_own_text(&doc, 4), Err(EditError::NoSuchPage(4))));
+}
