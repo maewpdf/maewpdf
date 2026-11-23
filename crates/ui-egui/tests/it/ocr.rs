@@ -367,6 +367,48 @@ fn a_scan_with_a_typed_text_box_is_still_recognized() {
     }
 }
 
+/// Thai edition: a scan Edit left alone because it had text then (here, words recognized from the
+/// OCR dialog) is read once an Undo takes that text away. It was marked as read and never read
+/// again in that session, so the scan had no words to edit.
+#[test]
+fn a_scan_left_alone_for_its_text_is_read_once_undo_takes_the_text_away() {
+    if !pdfcraft_engine::ocr::available() {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let mut h = edit_harness(scan());
+    let id = h.state().active_ids().unwrap().1;
+    // Words recognized by hand, before Edit is on.
+    let ph = h.state().session.get(id).unwrap().info.pages[0].height as f64;
+    let words = vec![PlacedWord {
+        text: "Recognize".into(),
+        origin: [72.0, ph - 100.0],
+        across: [80.0, 0.0],
+        up: [0.0, 12.0],
+        confidence: None,
+        source: "ocrs".into(),
+    }];
+    assert!(h.state_mut().apply_edit(Edit::AddOcrText { page: 0, words }));
+    h.run_steps(2);
+    let by_hand = h.state().session.get(id).unwrap().can_undo().map(str::to_owned);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(6);
+    assert!(h.state().ocr_run.is_none(), "finished");
+    assert_eq!(h.state().session.get(id).unwrap().can_undo().map(str::to_owned), by_hand, "the page had text: nothing more was recognized");
+    // Undo takes the layer away: the page is a bare scan again, and Edit reads it.
+    h.state_mut().undo();
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), None, "a bare scan again");
+    h.run_steps(8);
+    assert!(h.state().ocr_run.is_none(), "finished");
+    let doc = h.state().session.get(id).unwrap();
+    assert_eq!(doc.can_undo(), Some("Recognize text"), "Edit read the scan after the Undo");
+    assert!(
+        doc.text_blocks(0).iter().any(|b| b.invisible && b.editor_text.contains("scanned")),
+        "{:?}",
+        doc.text_blocks(0).iter().map(|b| b.editor_text.clone()).collect::<Vec<_>>()
+    );
+}
+
 /// A page that is not a scan when Edit looks at it is looked at again after the document changes:
 /// adding a picture of text that covers it turns it into a scan, and Edit then reads it (and does
 /// so once).

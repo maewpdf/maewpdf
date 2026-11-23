@@ -959,6 +959,17 @@ impl PdfCraftApp {
                 }
                 // An automatic run that found nothing (a page that has text of its own) says nothing.
                 if automatic && words == 0 {
+                    // Thai edition: and the page is judged again once the document changes, as a
+                    // page found no scan is. Kept as read, it was never read again in that session:
+                    // after an Undo took its text away (a recognized layer, a merged text box), the
+                    // scan stayed without words to edit.
+                    if let Some(a) = auto {
+                        let generation = self.session.get(doc).map_or(a.generation, |d| d.edit_generation());
+                        if let Some(view) = self.views.iter_mut().find(|v| v.id == doc) {
+                            view.auto_ocr_tried.remove(&a.page);
+                            view.auto_ocr_skipped.insert(a.page, generation);
+                        }
+                    }
                     return;
                 }
                 let words_part = if words == 1 {
