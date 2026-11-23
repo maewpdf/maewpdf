@@ -3262,8 +3262,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.resize"]
 tools = ["page_resize"]
-evidence = ["crates/edit/src/resize_tests.rs::a_mixed_style_paragraph_is_still_edited_in_place_after_a_resize", "crates/edit/src/resize_tests.rs::marks_and_tagged_layers_keep_their_tags_and_balance", "crates/ui-egui/src/dialogs/resize_pages.rs::a_large_page_takes_the_size_most_pages_have_in_one_undo_step", "crates/automation/tests/it/automation.rs::pages_are_resized_through_the_tool"]
-notes = "MaewPDF (Thai edition). A4, A3, A5, Letter, Legal, Tabloid, the size most pages have, or a custom size; turned to each page's orientation on request; content scaled evenly and centred, never rasterised; annotations move with the page. Pages with MaewPDF text boxes are refused until the boxes are merged or deleted."
+evidence = ["crates/edit/src/resize_tests.rs::a_mixed_style_paragraph_is_still_edited_in_place_after_a_resize", "crates/edit/src/resize_tests.rs::marks_and_tagged_layers_keep_their_tags_and_balance", "crates/ui-egui/src/dialogs/resize_pages.rs::a_large_page_takes_the_size_most_pages_have_in_one_undo_step", "crates/automation/tests/it/automation.rs::pages_are_resized_through_the_tool", "crates/edit/src/resize_tests.rs::text_boxes_become_part_of_the_resized_page"]
+notes = "MaewPDF (Thai edition). A4, A3, A5, Letter, Legal, Tabloid, the size most pages have, or a custom size; turned to each page's orientation on request; content scaled evenly and centred, never rasterised; annotations move with the page. MaewPDF text boxes on a resized page become part of the page (as Merge text boxes does), scaled with it; undo brings them back."
 
 [[feature]]
 id = "organize.crop-tool"

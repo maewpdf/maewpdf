@@ -74,6 +74,29 @@ impl ResizeDraft {
     }
 }
 
+/// What a failed resize tells the user, in their language: the engine's reasons
+/// (`pdfcraft_edit::resize`) are English, so the ones it gives are worded here; any other is shown
+/// as it is.
+pub(crate) fn error_text(error: &pdfcraft_engine::EditError) -> String {
+    let detail = error.to_string();
+    // "page 3: its content can't be read" → 3.
+    let page = detail.strip_prefix("page ").and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next()).filter(|n| !n.is_empty());
+    let n = [("n", page.unwrap_or("?"))];
+    if detail.starts_with("the page size must be between") {
+        tl!("The page size must be between 1 point and 200 inches on each side").into()
+    } else if detail.contains("has no area to resize") {
+        crate::i18n::fmt(tl!("Page {n} has no area to resize"), &n)
+    } else if detail.contains("can't be scaled to that size") {
+        crate::i18n::fmt(tl!("Page {n} can't be scaled to that size"), &n)
+    } else if detail.contains("its content") {
+        crate::i18n::fmt(tl!("The content of page {n} can't be read, so it can't be resized"), &n)
+    } else if detail.contains("does not exist") {
+        tl!("No pages match those choices").into()
+    } else {
+        detail
+    }
+}
+
 /// The label of a paper for the list: its name in the print settings.
 fn paper_label(short: &str) -> &'static str {
     page_resize::NAMED.iter().find(|(s, _)| *s == short).map_or("A4", |(_, full)| *full)
@@ -226,5 +249,14 @@ mod tests {
         assert!(d.edit(info, &[0]).is_err(), "too small");
         let d = ResizeDraft { which: 1, ..Default::default() };
         assert!(d.edit(info, &[]).is_err(), "no pages");
+    }
+
+    #[test]
+    fn failures_are_worded_for_the_user() {
+        let (mut s, id) = session(&[(612.0, 792.0)]);
+        let too_small = s.apply(id, Edit::ResizePages { pages: vec![0], width: 0.0, height: 400.0, match_orientation: false }).unwrap_err();
+        assert_eq!(error_text(&too_small), "The page size must be between 1 point and 200 inches on each side");
+        let missing = s.apply(id, Edit::ResizePages { pages: vec![5], width: 300.0, height: 400.0, match_orientation: false }).unwrap_err();
+        assert_eq!(error_text(&missing), "No pages match those choices");
     }
 }

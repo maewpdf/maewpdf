@@ -216,7 +216,7 @@ fn a_stray_q_cannot_end_the_scale_early() {
 }
 
 #[test]
-fn pages_with_text_boxes_and_impossible_sizes_are_refused_unchanged() {
+fn impossible_sizes_and_pages_are_refused_unchanged() {
     let mut doc = mixed_region_page();
     let original = streams(&doc, 0);
     for bad in [0.0, -5.0, f64::NAN, f64::INFINITY, MAX_SIDE + 1.0] {
@@ -226,10 +226,19 @@ fn pages_with_text_boxes_and_impossible_sizes_are_refused_unchanged() {
     assert!(matches!(resize_pages(&mut doc, &[3], size(300.0, 400.0)), Err(EditError::NoSuchPage(3))));
     assert_eq!(streams(&doc, 0), original);
     assert_eq!(media(&doc, 0), [0.0, 0.0, 600.0, 800.0]);
-    add_content(&mut doc, 0, &Content::Text(AddedText { rect: [72.0, 300.0, 200.0, 340.0], text: "box".into(), ..AddedText::default() })).unwrap();
-    let with_box = streams(&doc, 0);
-    let err = resize_pages(&mut doc, &[0], size(300.0, 400.0)).unwrap_err();
-    assert!(err.to_string().contains("text boxes"), "{err}");
-    assert_eq!(streams(&doc, 0), with_box);
-    assert_eq!(media(&doc, 0), [0.0, 0.0, 600.0, 800.0]);
+}
+
+/// A page with MaewPDF text boxes is resized too: the boxes become part of the page (as Merge text
+/// boxes makes them), scaled with the rest, and their text is the page's to edit.
+#[test]
+fn text_boxes_become_part_of_the_resized_page() {
+    let mut doc = mixed_region_page();
+    add_content(&mut doc, 0, &Content::Text(AddedText { rect: [72.0, 300.0, 300.0, 340.0], text: "Box".into(), ..AddedText::default() })).unwrap();
+    let before = line_rect(&doc, "Box");
+    resize_pages(&mut doc, &[0], size(300.0, 400.0)).unwrap();
+    let doc = reopen(&doc);
+    assert!(list_added(&doc).is_empty(), "no added items are left to draw from the old model");
+    assert!(close(line_rect(&doc, "Box"), before.map(|v| v * 0.5)), "{:?} vs {before:?}", line_rect(&doc, "Box"));
+    assert!(text::text_blocks(&doc, 0).unwrap().iter().any(|b| b.editor_text.contains("Box")), "the box's text is the page's text");
+    assert_eq!(depth_at_end(&doc, 0), 0);
 }

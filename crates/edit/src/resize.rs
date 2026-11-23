@@ -13,9 +13,11 @@
 //! mark on top, a text box, an OCR layer) is drawn in the new page's space. The page's boxes and
 //! its annotations are moved the same way; an appearance follows its annotation's `/Rect`.
 //!
-//! A page with MaewPDF text boxes (added items) is refused: they are drawn from the stored model
-//! in page space, which the scale would not reach. Merging them into the page's text first (or
-//! deleting them) makes the page resizable.
+//! MaewPDF text boxes and pictures added to the page (added items) are drawn from a stored model in
+//! page space, which the scale would not reach, so a resize makes them part of the page, as Merge
+//! text boxes does (`crate::release_content`): their streams lose the marks that made them items
+//! and are scaled with the rest. Their text is then the page's text, edited with Edit text. Undo
+//! brings back the items with the old size.
 
 use std::collections::HashSet;
 
@@ -81,12 +83,6 @@ pub fn resize_pages(doc: &mut Document, pages: &[usize], size: PageSize) -> Resu
         }
         let Some(page) = all.get(i) else { return Err(EditError::NoSuchPage(i)) };
         let list = contents(doc, page)?;
-        if list.iter().any(|o| stream_tag(doc, o).as_deref() == Some(ADDED_TAG)) {
-            return Err(EditError::Invalid(format!(
-                "page {} has text boxes added in MaewPDF; merge them into the page's text or delete them, then resize the page",
-                i + 1
-            )));
-        }
         let crop = page.crop(doc);
         let unit = page.user_unit(doc);
         let turned = page.rotation(doc) % 180 != 0;
@@ -226,7 +222,9 @@ fn scaled_layers(doc: &Document, list: &[Object], fit: Fit) -> Result<Vec<Entry>
             out.push(close(open_at_end.saturating_add(1)));
             continue;
         }
-        // A tagged layer drawn on its own: the scale goes into its stream, which keeps its tag.
+        // A tagged layer drawn on its own: the scale goes into its stream, which keeps its tag. An
+        // added item becomes part of the page instead (see the module notes).
+        let tag = stream_tag(doc, o);
         let resolved = doc.resolve(o);
         let Object::Stream(s) = &*resolved else { return Err("its content isn't a stream".into()) };
         let bytes = s.decoded_within(BALANCE_MAX_BYTES).map_err(|_| "its content can't be read".to_owned())?;
@@ -238,6 +236,10 @@ fn scaled_layers(doc: &Document, list: &[Object], fit: Fit) -> Result<Vec<Entry>
         let mut dict = s.dict.clone();
         for key in [&b"Filter"[..], b"DecodeParms", b"Length", b"DL", b"F", b"FFilter", b"FDecodeParms"] {
             dict.remove(key);
+        }
+        if tag.as_deref() == Some(ADDED_TAG) {
+            dict.remove(b"PCMark");
+            dict.remove(b"PCAdded");
         }
         out.push(Entry::New(Stream::flate(dict, &data)));
         i += 1;

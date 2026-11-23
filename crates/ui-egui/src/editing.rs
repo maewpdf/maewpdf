@@ -310,7 +310,12 @@ impl PdfCraftApp {
                         view.pending_text_open = None;
                     }
                 }
-                let message = if matches!(edit, Edit::MoveObjects { .. }) { crate::object_ui::move_error(&e) } else { e.to_string() };
+                let message = match edit {
+                    Edit::MoveObjects { .. } => crate::object_ui::move_error(&e),
+                    // Thai edition: Resize pages says why in the user's language.
+                    Edit::ResizePages { .. } => crate::resize_pages::error_text(&e),
+                    _ => e.to_string(),
+                };
                 self.notify_fmt("{label} failed: {e}", &[("label", &crate::i18n::edit_label(&label)), ("e", &message)]);
                 false
             }

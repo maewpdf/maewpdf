@@ -3219,3 +3219,6 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	Selection ({n})	หน้าที่เลือก ({n})
 	That paper size isn't known	ไม่รู้จักขนาดกระดาษนี้
 	The page size must be between 1 point and 200 inches on each side	ขนาดหน้าต้องอยู่ระหว่าง 1 พอยต์ ถึง 200 นิ้ว ในแต่ละด้าน
+	Page {n} has no area to resize	หน้า {n} ไม่มีพื้นที่ให้ปรับขนาด
+	Page {n} can't be scaled to that size	ปรับหน้า {n} เป็นขนาดนั้นไม่ได้
+	The content of page {n} can't be read, so it can't be resized	อ่านเนื้อหาของหน้า {n} ไม่ได้ จึงปรับขนาดไม่ได้
