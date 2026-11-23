@@ -114,6 +114,8 @@ fn remote_document_paths_to_other_computers_and_devices_are_refused() {
 fn urls_are_the_editions_own() {
     assert_eq!(super::GITHUB, format!("https://github.com/{0}/{0}", super::APP));
     assert_eq!(super::APP_PAGE, format!("https://{}.github.io/", super::APP));
+    assert_eq!(super::REPORT_PROBLEM, format!("{}#report", super::APP_PAGE), "the report box is on the edition's own site");
+    assert_eq!(super::for_command("help.report_problem").map(|l| l.url), Some(super::REPORT_PROBLEM));
     for l in super::LINKS {
         assert!(l.url.starts_with("https://"), "{}", l.url);
         assert!(crate::commands::command(l.command).is_some(), "{} is a registered command", l.command);

@@ -11,6 +11,8 @@ pub const APP: &str = "maewpdf";
 // ArtCraft name or present itself as supported by them, so the community links are gone.
 pub const APP_PAGE: &str = "https://maewpdf.github.io/";
 pub const GITHUB: &str = "https://github.com/maewpdf/maewpdf";
+/// The site's problem-report box (Thai edition): a name and what went wrong, sent to the developer.
+pub const REPORT_PROBLEM: &str = "https://maewpdf.github.io/#report";
 
 /// A link and the registry command that opens it.
 #[derive(Clone, Copy, Debug)]
@@ -26,6 +28,8 @@ pub struct Link {
 pub const LINKS: &[Link] = &[
     Link { command: "help.app_page", label: "PdfCraft web page", url: APP_PAGE, icon: "globe" },
     Link { command: "help.github", label: "PdfCraft on GitHub", url: GITHUB, icon: "code-xml" },
+    // Thai edition: Help › Report a problem opens the site's report box.
+    Link { command: "help.report_problem", label: "Report a problem…", url: REPORT_PROBLEM, icon: "triangle-alert" },
 ];
 
 pub fn for_command(id: &str) -> Option<&'static Link> {

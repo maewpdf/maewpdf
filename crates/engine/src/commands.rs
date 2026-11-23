@@ -444,6 +444,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("help.editing_tips", "Editing tips", HELP, None, Nothing, "circle-help"),
     c("help.app_page", "PdfCraft web page", HELP, None, Nothing, "globe"),
     c("help.github", "PdfCraft on GitHub", HELP, None, Nothing, "code-xml"),
+    // Thai edition: the site's problem-report box.
+    c("help.report_problem", "Report a problem…", HELP, None, Nothing, "triangle-alert"),
     c("help.check_updates", "Check for updates…", HELP, None, Nothing, "cloud"),
     c("help.about", "About PdfCraft", HELP, None, Nothing, "info"),
 ];
