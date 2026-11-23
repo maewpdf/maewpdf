@@ -3222,3 +3222,61 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	Page {n} has no area to resize	หน้า {n} ไม่มีพื้นที่ให้ปรับขนาด
 	Page {n} can't be scaled to that size	ปรับหน้า {n} เป็นขนาดนั้นไม่ได้
 	The content of page {n} can't be read, so it can't be resized	อ่านเนื้อหาของหน้า {n} ไม่ได้ จึงปรับขนาดไม่ได้
+error	no such document	ไม่พบเอกสาร
+error	the password is incorrect	รหัสผ่านไม่ถูกต้อง
+error	the password is wrong	รหัสผ่านไม่ถูกต้อง
+error	nothing to undo	ไม่มีอะไรให้ย้อนกลับ
+error	nothing to redo	ไม่มีอะไรให้ทำซ้ำ
+error	cancelled	ยกเลิกแล้ว
+error	it is password-protected	ไฟล์นี้มีรหัสผ่าน
+error	its security settings don't allow copying pages	การตั้งค่าความปลอดภัยของไฟล์นี้ไม่อนุญาตให้คัดลอกหน้า
+error	this document is signed: rewriting it would invalidate its signatures (save it incrementally instead)	เอกสารนี้มีลายเซ็นดิจิทัล ถ้าเขียนไฟล์ใหม่ทั้งไฟล์ ลายเซ็นจะใช้ไม่ได้ (ให้บันทึกแบบต่อท้ายไฟล์แทน)
+error	changes to the document	แก้ไขเอกสาร
+error	changing security	เปลี่ยนการตั้งค่าความปลอดภัย
+error	comments	เพิ่มหรือแก้ความคิดเห็น
+error	copying text and images	คัดลอกข้อความและรูปภาพ
+error	extracting pages	แยกหน้าออก
+error	filling in form fields	กรอกแบบฟอร์ม
+error	page changes	เปลี่ยนแปลงหน้า
+error	printing	พิมพ์
+error	removing the encryption, which PDF/A forbids	ถอดการเข้ารหัส ซึ่ง PDF/A ไม่อนุญาต
+error	splitting the document	แยกเอกสาร
+error	this document can't be edited: {0}	แก้ไขเอกสารนี้ไม่ได้: {0}
+error	the document's security settings don't allow {0}; open it with the owner password to make this change	การตั้งค่าความปลอดภัยของเอกสารไม่อนุญาตให้{0} ให้เปิดด้วยรหัสผ่านเจ้าของเอกสารก่อนจึงจะแก้ได้
+error	the edited document could not be written: {0}	เขียนเอกสารที่แก้ไขแล้วไม่ได้: {0}
+error	the edited document could not be reopened: {0}	เปิดเอกสารที่แก้ไขแล้วอีกครั้งไม่ได้: {0}
+error	couldn't use {0}	ใช้ {0} ไม่ได้
+error	{0} isn't possible in a signed document: it would rewrite the file and invalidate the signatures	ทำ{0}ในเอกสารที่มีลายเซ็นดิจิทัลไม่ได้ เพราะต้องเขียนไฟล์ใหม่และลายเซ็นจะใช้ไม่ได้
+error	page {0} does not exist	ไม่มีหน้า {0}
+error	the Thai font can't show "{0}"	ฟอนต์ภาษาไทยแสดง "{0}" ไม่ได้
+error	the standard fonts can't draw "{0}" ({1}); only Western European characters can be added as text for now	ฟอนต์มาตรฐานวาด "{0}" ({1}) ไม่ได้ ตอนนี้เพิ่มเป็นข้อความได้เฉพาะตัวอักษรยุโรปตะวันตก
+error	The file was not found	ไม่พบไฟล์
+error	The folder was not found	ไม่พบโฟลเดอร์
+error	Access to the file was denied	ไม่มีสิทธิ์เข้าถึงไฟล์นี้
+error	The file is open in another program	ไฟล์นี้เปิดอยู่ในโปรแกรมอื่น ให้ปิดโปรแกรมนั้นก่อนแล้วลองอีกครั้ง
+error	Part of the file is locked by another program	บางส่วนของไฟล์ถูกโปรแกรมอื่นล็อกไว้
+error	There is not enough space on the disk	พื้นที่ในดิสก์ไม่พอ
+error	A file with that name already exists	มีไฟล์ชื่อนี้อยู่แล้ว
+error	The file name or path is too long	ชื่อไฟล์หรือที่อยู่ไฟล์ยาวเกินไป
+error	replacement text is empty	ข้อความที่จะใส่แทนว่างเปล่า
+error	type some text first	พิมพ์ข้อความก่อน
+error	replacement text has too many unique characters	ข้อความที่จะใส่แทนมีตัวอักษรต่างกันมากเกินไป
+error	too many unique characters for one font	ตัวอักษรต่างกันมากเกินกว่าที่ฟอนต์เดียวจะรองรับได้
+error	a selected paragraph no longer exists	ย่อหน้าที่เลือกไว้ไม่มีอยู่แล้ว ให้เลือกใหม่อีกครั้ง
+error	a selected text line no longer exists	บรรทัดที่เลือกไว้ไม่มีอยู่แล้ว ให้เลือกใหม่อีกครั้ง
+error	a selected paragraph has no area	ย่อหน้าที่เลือกไม่มีพื้นที่
+error	a selected image has no area	รูปที่เลือกไม่มีพื้นที่
+error	this page has too many objects to select together	หน้านี้มีวัตถุมากเกินกว่าจะเลือกพร้อมกันได้
+error	the page's text is too large to read	ข้อความในหน้านี้มีขนาดใหญ่เกินกว่าจะอ่านได้
+error	the paragraph move is too large	ย้ายย่อหน้าไกลเกินไป
+error	the image move is too large	ย้ายรูปไกลเกินไป
+error	vertical text can't be arranged yet	ยังจัดลำดับข้อความแนวตั้งไม่ได้
+error	this paragraph is used as a clipping path and can't be arranged	ย่อหน้านี้ใช้เป็นกรอบตัดภาพ จึงจัดลำดับไม่ได้
+error	this paragraph is in a layer of the document and can't be arranged yet	ย่อหน้านี้อยู่ในเลเยอร์ของเอกสาร จึงยังจัดลำดับไม่ได้
+error	this paragraph is drawn twice (a bold effect or a hidden copy) and can't be arranged yet	ย่อหน้านี้ถูกวาดซ้ำสองครั้ง (ทำตัวหนาหรือมีสำเนาซ่อนอยู่) จึงยังจัดลำดับไม่ได้
+error	this paragraph moves to new lines inside its text and can't be arranged yet	ย่อหน้านี้ขึ้นบรรทัดใหม่ภายในข้อความ จึงยังจัดลำดับไม่ได้
+error	the paragraph is already in front of everything on the page	ย่อหน้านี้อยู่หน้าสุดของหน้าแล้ว
+error	the paragraph is already behind everything on the page	ย่อหน้านี้อยู่หลังสุดของหน้าแล้ว
+error	only a text box can become text of the page	รวมเข้าเป็นข้อความของหน้าได้เฉพาะกล่องข้อความ
+error	complex text needs the complete source TrueType/OpenType face; load that font before editing	ข้อความภาษานี้ต้องใช้ไฟล์ฟอนต์ต้นฉบับแบบเต็ม ให้โหลดฟอนต์นั้นก่อนแก้ไข
+error	the selected font has no usable TrueType/CFF outlines and metrics	ฟอนต์ที่เลือกไม่มีข้อมูลรูปตัวอักษรที่ใช้ได้

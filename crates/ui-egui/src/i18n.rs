@@ -517,6 +517,15 @@ fn lower_turkish(c: char) -> std::char::ToLowercase {
     }
 }
 
+/// Thai edition: an engine or system reason in the UI language (`errors`), or as it is when it has
+/// no translation.
+pub fn error_detail(detail: &str) -> String {
+    errors::detail(current(), detail)
+}
+
+// Thai edition: the engine's and the system's reasons, translated where the catalog has them.
+mod errors;
+
 pub fn current() -> Lang {
     CURRENT.get()
 }

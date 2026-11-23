@@ -493,15 +493,24 @@ impl PdfCraftApp {
         self.notify(tl!(text).to_string());
     }
 
-    /// Notify with an error's own text. Engine and OS messages are not translated: matching their
-    /// English wording would break silently whenever it changes.
+    /// Notify with an error's own text. Engine and OS messages keep their English wording; the
+    /// Thai edition translates the ones its catalog has (`error` context), and a changed wording
+    /// only falls back to the English, never to a wrong sentence.
     pub fn notify_error(&mut self, error: impl std::fmt::Display) {
-        self.notify(error.to_string());
+        // Thai edition: in the UI language where the catalog has the reason (`i18n::error_detail`).
+        self.notify(i18n::error_detail(&error.to_string()));
     }
 
     /// Notify with a `{name}`-style template in the UI language (placeholders filled once).
     pub fn notify_fmt(&mut self, template: &str, args: &[(&str, &str)]) {
-        self.notify(i18n::fmt(tl!(template), args));
+        // Thai edition: a reason filled in (`{e}`, `{why}`…) is said in the UI language where the
+        // catalog has it (`i18n::error_detail`); names, numbers and labels are left as they are.
+        let reasons: Vec<(&str, String)> = args
+            .iter()
+            .map(|(k, v)| (*k, if matches!(*k, "e" | "why" | "error" | "reason") { i18n::error_detail(v) } else { (*v).to_owned() }))
+            .collect();
+        let args: Vec<(&str, &str)> = reasons.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        self.notify(i18n::fmt(tl!(template), &args));
     }
 
     /// `true` while any open document still waits for page renders (used by headless capture).
