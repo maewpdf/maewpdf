@@ -1862,6 +1862,8 @@ fn dialog_about(ui: &mut egui::Ui, _req: &mut Pending) -> bool {
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new(crate::menus::APP_NAME).font(theme::semibold(20.0)));
                 ui.label(crate::i18n::fmt(tl!("Version {v}"), &[("v", &pdfcraft_engine::build_info::version())]));
+                // The upstream release MaewPDF is built on, now that its own number differs (Thai edition).
+                ui.label(egui::RichText::new(format!("อิงจาก PdfCraft {}", pdfcraft_engine::build_info::VERSION)).color(t.text_muted));
             });
             ui.add_space(6.0);
             ui.label(tl!("A clean-room, open-source PDF application written in Rust. MIT OR Apache-2.0."));

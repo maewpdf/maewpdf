@@ -80,12 +80,24 @@ fn edition_numbers_without_th_compare_too() {
     assert!(!is_newer("v0.21.1-rc.1", "0.21.1"), "a pre-release suffix is still not a number");
 }
 
-/// The dialog compares with the edition's own version, -th.N included (Thai edition).
+/// MaewPDF 1.0.0 follows the 0.x.y-th.N releases (Thai edition): those who have one are offered it,
+/// and nothing numbered the old way is offered to someone who has it.
 #[test]
-fn the_next_thai_edition_release_is_offered_and_this_one_is_up_to_date() {
+fn maewpdf_1_0_0_follows_the_th_releases() {
+    assert!(is_newer("v1.0.0", "0.21.1-th.3"));
+    assert!(is_newer("v1.0.0", "0.21.1-th.99"));
+    assert!(is_newer("v1.0.1", "1.0.0"));
+    assert!(is_newer("v1.1.0", "1.0.9"));
+    assert!(!is_newer("v0.22.0-th.1", "1.0.0"), "an upstream-numbered release is older than 1.0.0");
+    assert!(!is_newer("v1.0.0", "1.0.0"));
+}
+
+/// The dialog compares with MaewPDF's own version (Thai edition).
+#[test]
+fn the_next_maewpdf_release_is_offered_and_this_one_is_up_to_date() {
     let current = pdfcraft_engine::build_info::edition_version();
-    let (base, n) = current.rsplit_once("-th.").expect("the edition version has a -th.N");
-    let next = format!("v{base}-th.{}", n.parse::<u64>().expect("a number") + 1);
+    let (base, patch) = current.rsplit_once('.').expect("the edition version is <major>.<minor>.<patch>");
+    let next = format!("v{base}.{}", patch.parse::<u64>().expect("a number") + 1);
     let mut h = harness(Ok(&next));
     h.state_mut().execute("help.check_updates");
     settle(&mut h);
@@ -93,13 +105,12 @@ fn the_next_thai_edition_release_is_offered_and_this_one_is_up_to_date() {
     h.get_by_label_contains(&format!("You have version {current}."));
     h.get_by_label("Download");
 
-    for same in [format!("v{current}"), format!("v{base}")] {
-        let mut h = harness(Ok(&same));
-        h.state_mut().execute("help.check_updates");
-        settle(&mut h);
-        h.get_by_label_contains(&format!("MaewPDF {current} is up to date"));
-        assert!(h.query_by_label("Download").is_none(), "{same}");
-    }
+    let same = format!("v{current}");
+    let mut h = harness(Ok(&same));
+    h.state_mut().execute("help.check_updates");
+    settle(&mut h);
+    h.get_by_label_contains(&format!("MaewPDF {current} is up to date"));
+    assert!(h.query_by_label("Download").is_none(), "{same}");
 }
 
 #[test]

@@ -70,7 +70,8 @@ fn current_version() -> String {
 /// The edition's release number counts after the numbers, written `-th.N` or `-N` (Thai
 /// edition: either way, so a later release may drop the `th.`): `0.10.1-th.2` and `0.10.1-2` are
 /// newer than `0.10.1-th.1`, which is newer than `0.10.1`. Other pre-release and build suffixes
-/// are ignored. A version that doesn't parse is never newer.
+/// are ignored. A version that doesn't parse is never newer. From 1.0.0 MaewPDF numbers its own
+/// releases (`1.0.0`, `1.0.1`), which are newer than every `0.x.y-th.N` one.
 pub fn is_newer(latest: &str, current: &str) -> bool {
     matches!((parse(latest), parse(current)), (Some(l), Some(c)) if l > c)
 }
@@ -386,7 +387,7 @@ pub(crate) fn dialog(app: &mut PdfCraftApp, ctx: &egui::Context) {
         return;
     }
     let t = theme::Tokens::get(ctx);
-    // The edition's own version, with its -th.N (Thai edition).
+    // MaewPDF's own version, such as 1.0.0 (Thai edition).
     let current = pdfcraft_engine::build_info::edition_version();
     let mut close = false;
     let mut download: Option<String> = None;

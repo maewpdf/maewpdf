@@ -105,7 +105,7 @@ powershell -ExecutionPolicy Bypass -File thai\build-windows.ps1
 powershell -ExecutionPolicy Bypass -File thai\package-windows.ps1
 ```
 
-เลขรุ่นของตัวติดตั้งมาจากไฟล์ `thai\VERSION` (เช่น `0.21.1-th.1`) ซึ่งโปรแกรมใช้แสดงในหน้า "เกี่ยวกับ" และใช้ตรวจหาการอัปเดตด้วย
+เลขรุ่นของตัวติดตั้งมาจากไฟล์ `thai\VERSION` (เช่น `1.0.0`) ซึ่งโปรแกรมใช้แสดงในหน้า "เกี่ยวกับ" และใช้ตรวจหาการอัปเดตด้วย ตั้งแต่ 1.0.0 MaewPDF นับเลขรุ่นของตัวเอง ส่วนรุ่นของ PdfCraft ที่ใช้เป็นฐานคือเลข version ใน `Cargo.toml` ซึ่งหน้า "เกี่ยวกับ" แสดงไว้ด้วย
 
 ไฟล์จะอยู่ที่ `dist\release`
 
