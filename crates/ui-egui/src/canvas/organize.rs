@@ -433,6 +433,10 @@ pub(super) fn organize_grid(
                         view.pending_action = Some(ViewAction::ReplacePages);
                         ui.close();
                     }
+                    if ui.add_enabled(editable, egui::Button::new(tl!("Resize pages…"))).clicked() {
+                        view.pending_action = Some(ViewAction::ResizePages);
+                        ui.close();
+                    }
                     ui.separator();
                     if ui.add_enabled(editable, egui::Button::new(tl!("Cut"))).clicked() {
                         view.pending_action = Some(ViewAction::CopyPages { cut: true });

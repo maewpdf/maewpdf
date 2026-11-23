@@ -84,6 +84,15 @@ pub enum Edit {
         which: PageBox,
         spec: BoxSpec,
     },
+    /// Thai edition: Resize pages. `pages` take `width` × `height` points as shown (turned to each
+    /// page's orientation with `match_orientation`), and what they show is scaled evenly to fit,
+    /// centred (`pdfcraft_edit::resize_pages`).
+    ResizePages {
+        pages: Vec<usize>,
+        width: f64,
+        height: f64,
+        match_orientation: bool,
+    },
     /// Set or remove the page transition and display time of pages (ISO 32000-2 §12.4.4),
     /// Organize ▸ Page Transitions.
     SetTransition {

@@ -1226,6 +1226,24 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc"],
         )),
+        // Thai edition: Resize pages.
+        t(
+            "page_resize",
+            "Resize pages",
+            "Give pages a new paper size and scale what they show evenly to fit it, centred (nothing is rasterised: text stays text and searchable). size: a4, a3, a5, letter, legal, tabloid, a paper name from the print settings, or \"most\" (the size most pages of this document have); or width and height in points as the page is shown. match_orientation (default true for a named paper, false otherwise) turns the size to each page's orientation, so a landscape page becomes A4 landscape. Annotations move with the page. A page with MaewPDF text boxes is refused: merge them into the page's text or delete them first. Undoable.",
+        )
+        .cmd("page.resize")
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "pages": pages("to resize (default: all)"),
+                "size": { "type": "string" },
+                "width": { "type": "number", "minimum": 1, "maximum": 14400 },
+                "height": { "type": "number", "minimum": 1, "maximum": 14400 },
+                "match_orientation": { "type": "boolean" },
+            }),
+            &["doc"],
+        )),
         t(
             "doc_header_footer",
             "Add header and footer",

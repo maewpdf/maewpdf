@@ -854,6 +854,8 @@ pub enum ViewAction {
     InsertFromFileAt(usize),
     /// Replace the selected pages with pages from another file.
     ReplacePages,
+    /// Thai edition: Resize the selected pages (the Resize Pages dialog).
+    ResizePages,
     /// Save the document as the grid shows it.
     Save,
     Extract,

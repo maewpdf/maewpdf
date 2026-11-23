@@ -143,6 +143,41 @@ impl Automation {
         Ok(out)
     }
 
+    /// Thai edition: Resize pages to a named paper, the size most pages have, or width × height.
+    pub(crate) fn page_resize(&mut self, a: &Args) -> Result<Value> {
+        use pdfcraft_engine::page_resize;
+        let doc = self.doc(a)?;
+        let n = doc.info.pages.len();
+        let pages = match a.opt_ints("pages")? {
+            Some(_) => self.pages(a, "pages")?,
+            None => (0..n).collect(),
+        };
+        let (width, height, default_match) = match (a.opt_str("size")?, a.opt_num("width")?, a.opt_num("height")?) {
+            (Some(_), Some(_), _) | (Some(_), _, Some(_)) => return Err(ToolError::InvalidArgs("pass size or width and height, not both".into())),
+            (Some(s), None, None) if s.trim().eq_ignore_ascii_case("most") => {
+                let (w, h) = page_resize::most_common(&doc.info.pages).ok_or_else(|| ToolError::Failed("the document has no pages".into()))?;
+                (w, h, false)
+            }
+            (Some(s), None, None) => {
+                let (w, h) = page_resize::named(s).ok_or_else(|| {
+                    let names: Vec<&str> = page_resize::NAMED.iter().map(|(short, _)| *short).collect();
+                    ToolError::InvalidArgs(format!("unknown size {s:?}: use {}, \"most\", or width and height in points", names.join(", ")))
+                })?;
+                (w, h, true)
+            }
+            (None, Some(w), Some(h)) => (w, h, false),
+            (None, _, _) => return Err(ToolError::InvalidArgs("pass size (a4, letter, most…) or both width and height in points".into())),
+        };
+        let (lo, hi) = (page_resize::MIN_SIDE, page_resize::MAX_SIDE);
+        if !(lo..=hi).contains(&width) || !(lo..=hi).contains(&height) {
+            return Err(ToolError::InvalidArgs(format!("width and height must be between {lo} and {hi} points")));
+        }
+        let match_orientation = a.opt_bool("match_orientation")?.unwrap_or(default_match);
+        let mut out = self.apply(a, Edit::ResizePages { pages, width, height, match_orientation })?;
+        out["page_sizes"] = json!(self.doc(a)?.info.pages.iter().map(|p| [p.width, p.height]).collect::<Vec<_>>());
+        Ok(out)
+    }
+
     pub(crate) fn insert_blank(&mut self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let at = self.position(a, "at")?;

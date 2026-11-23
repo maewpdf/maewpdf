@@ -468,6 +468,15 @@ impl PdfCraftApp {
                 self.boxes_draft.seeded = None;
                 self.dialog = Some(Dialog::PageBoxes);
             }
+            // Thai edition: Resize pages, on the selected pages when some are selected.
+            "page.resize" => {
+                if let Some(i) = active {
+                    let n = self.session.get(self.views[i].id).map_or(1, |d| d.info.pages.len());
+                    self.resize_draft.to = n;
+                    self.resize_draft.which = if self.views[i].selected.is_empty() { 0 } else { 1 };
+                }
+                self.dialog = Some(Dialog::ResizePages);
+            }
             "page.extract" => self.open_extract_dialog(),
             "page.rotate_dialog" => {
                 if let Some(i) = active {

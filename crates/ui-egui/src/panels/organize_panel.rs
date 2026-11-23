@@ -145,6 +145,8 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         divider(ui, t);
         for (icon, label, availability, command) in [
             ("square-dashed-mouse-pointer", "Set page boxes", Availability::Ready, Some("page.boxes")),
+            // Thai edition.
+            ("maximize-2", "Resize pages", Availability::Ready, Some("page.resize")),
             ("crop", "Crop pages", Availability::Ready, Some("page.crop")),
             ("presentation", "Page transitions", Availability::Later, Some("page.transitions")),
             ("file-text", "Page templates", Availability::Later, None),

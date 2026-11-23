@@ -213,6 +213,10 @@ pub(super) fn pages(
                     view.pending_action = Some(crate::canvas::ViewAction::ReplacePages);
                     ui.close();
                 }
+                if ui.add_enabled(editable, egui::Button::new(tl!("Resize pages…"))).clicked() {
+                    view.pending_action = Some(crate::canvas::ViewAction::ResizePages);
+                    ui.close();
+                }
                 ui.separator();
                 if ui.add_enabled(editable, egui::Button::new(tl!("Cut"))).clicked() {
                     view.pending_action = Some(crate::canvas::ViewAction::CopyPages { cut: true });

@@ -2,7 +2,7 @@ use super::layout::is_thai;
 use super::layout::norm;
 use super::{Content, MarkKind, ObjRef, ShapedScript, Std14, n};
 
-pub(super) const TAG: &str = "Added";
+pub(crate) const TAG: &str = "Added";
 
 /// The most character spacing an added text takes either way, in points: as far as the font size goes.
 pub const CHAR_SPACING_LIMIT: f64 = 500.0;

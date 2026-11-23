@@ -44,6 +44,8 @@ mod open;
 pub mod open_parameters;
 pub mod optimizer;
 mod page_filter;
+// Thai edition: the sizes Resize pages offers.
+pub mod page_resize;
 mod pictures;
 pub mod print_raster;
 pub mod printcheck;

@@ -204,6 +204,8 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                 title: "More",
                 items: &[
                     item("Set page boxes", "square-dashed-mouse-pointer", "page.boxes", Ready),
+                    // Thai edition.
+                    item("Resize pages", "maximize-2", "page.resize", Ready),
                     item("Crop pages", "crop", "page.crop", Ready),
                     item("Duplicate pages", "copy-plus", "page.duplicate", Ready),
                     item("Reverse pages", "arrow-up-down", "page.reverse", Ready),

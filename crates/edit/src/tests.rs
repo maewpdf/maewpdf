@@ -7,6 +7,10 @@ use super::*;
 #[path = "mark_transaction_tests.rs"]
 mod mark_transactions;
 
+// Thai edition: Resize pages.
+#[path = "resize_tests.rs"]
+mod resize_tests;
+
 /// Three pages: an upright page with content that leaves the graphics state changed (an
 /// unbalanced `cm`), a page rotated 90° and one with inherited, shared resources.
 fn fixture() -> Document {

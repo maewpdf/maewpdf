@@ -85,6 +85,9 @@ pub use added::{
 mod apply;
 mod marks;
 mod place;
+// Thai edition: Resize pages (a new paper size, the content scaled to fit).
+pub mod resize;
+pub use resize::{PageSize, resize_pages};
 
 pub use apply::{add_background, add_header_footer, add_watermark, marks_present, remove_marks};
 #[cfg(test)]

@@ -41,6 +41,7 @@ pub use store::{
     Arrange, add_content, added_layer, arrange_content, arrange_paragraph, delete_content, isolate_content, list_added, release_content,
     scan_markers, update_content,
 };
+pub(crate) use types::TAG;
 pub use types::{Added, AddedImage, AddedText, Align, CHAR_SPACING_LIMIT, Family, Ink, MarkerScan, TextDirection};
 
 #[derive(Clone, Debug, PartialEq)]

@@ -3209,3 +3209,13 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	{list} and {last}	{list} และ {last}
 	{why} ({n})	{why} ({n})
 	Replace…	แทนที่…
+	Resize page	ปรับขนาดหน้า
+	Resize pages	ปรับขนาดหน้า
+	Resize pages…	ปรับขนาดหน้า…
+	Resize Pages	ปรับขนาดหน้า
+	The content is scaled evenly to fit the new size, centred. Text stays text.	เนื้อหาจะถูกย่อหรือขยายเท่ากันทุกด้านให้พอดีขนาดใหม่ และจัดไว้กึ่งกลาง ข้อความยังเป็นข้อความเหมือนเดิม
+	Same size as most pages	ขนาดเดียวกับหน้าส่วนใหญ่
+	Turn the size to each page's orientation	หมุนขนาดตามแนวของแต่ละหน้า (แนวตั้ง/แนวนอน)
+	Selection ({n})	หน้าที่เลือก ({n})
+	That paper size isn't known	ไม่รู้จักขนาดกระดาษนี้
+	The page size must be between 1 point and 200 inches on each side	ขนาดหน้าต้องอยู่ระหว่าง 1 พอยต์ ถึง 200 นิ้ว ในแต่ละด้าน

@@ -3821,6 +3821,42 @@ fn duplicating_and_cropping_through_tools() {
     assert!(matches!(a.call("page_set_box", &json!({ "doc": doc, "rect": [0, 0, 10, 10] })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// Thai edition: Resize pages through `page_resize`: a named paper, the size most pages have, or a
+/// width and height; the text stays text, one undo step puts it back, and the file saves.
+#[test]
+fn pages_are_resized_through_the_tool() {
+    let dir = workdir("resize");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let size = |r: &Value, i: usize| -> (f64, f64) { (r["page_sizes"][i][0].as_f64().unwrap(), r["page_sizes"][i][1].as_f64().unwrap()) };
+    let near = |(w, h): (f64, f64), (x, y): (f64, f64)| (w - x).abs() < 0.01 && (h - y).abs() < 0.01;
+    let r = ok(&mut a, "page_resize", json!({ "doc": doc, "pages": [1], "size": "a4" }));
+    assert!(near(size(&r, 0), (595.28, 841.89)), "{r}");
+    assert!(near(size(&r, 1), (200.0, 300.0)), "the other pages keep their size: {r}");
+    assert_eq!(page_text(&mut a, doc), ["Page 1", "Page 2", "Page 3"], "the text is still text");
+    // Back to the size the other pages have.
+    let r = ok(&mut a, "page_resize", json!({ "doc": doc, "pages": [1], "size": "most" }));
+    assert!(near(size(&r, 0), (200.0, 300.0)), "{r}");
+    let r = ok(&mut a, "page_resize", json!({ "doc": doc, "pages": [2], "width": 300, "height": 300 }));
+    assert!(near(size(&r, 1), (300.0, 300.0)), "{r}");
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Resize page");
+    let r = ok(&mut a, "page_resize", json!({ "doc": doc, "pages": [3], "size": "Letter", "match_orientation": false }));
+    assert!(near(size(&r, 1), (200.0, 300.0)), "undone: {r}");
+    assert!(near(size(&r, 2), (612.0, 792.0)), "{r}");
+    for bad in [
+        json!({ "doc": doc, "size": "b9" }),
+        json!({ "doc": doc, "size": "a4", "width": 100 }),
+        json!({ "doc": doc, "width": 0, "height": 100 }),
+        json!({ "doc": doc, "width": 100 }),
+        json!({ "doc": doc }),
+    ] {
+        assert!(matches!(a.call("page_resize", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "resized.pdf" }));
+    let saved = ok(&mut a, "doc_open", json!({ "path": "resized.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(page_text(&mut a, saved), ["Page 1", "Page 2", "Page 3"]);
+}
+
 #[test]
 fn headers_watermarks_and_backgrounds_through_tools() {
     let dir = workdir("marks");

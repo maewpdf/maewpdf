@@ -3254,6 +3254,18 @@ evidence = ["crates/ui-egui/tests/it/pageboxes.rs::set_page_boxes_dialog_applies
 notes = "crop/trim/bleed/art/media, margins in pt/in/mm, page ranges, preview; no Remove white margins yet"
 
 [[feature]]
+id = "organize.resize-pages"
+title = "Resize pages to a paper size (content scaled to fit)"
+area = "D"
+tier = "P2"
+milestone = "M4"
+status = "shipped"
+commands = ["page.resize"]
+tools = ["page_resize"]
+evidence = ["crates/edit/src/resize_tests.rs::a_mixed_style_paragraph_is_still_edited_in_place_after_a_resize", "crates/edit/src/resize_tests.rs::marks_and_tagged_layers_keep_their_tags_and_balance", "crates/ui-egui/src/dialogs/resize_pages.rs::a_large_page_takes_the_size_most_pages_have_in_one_undo_step", "crates/automation/tests/it/automation.rs::pages_are_resized_through_the_tool"]
+notes = "MaewPDF (Thai edition). A4, A3, A5, Letter, Legal, Tabloid, the size most pages have, or a custom size; turned to each page's orientation on request; content scaled evenly and centred, never rasterised; annotations move with the page. Pages with MaewPDF text boxes are refused until the boxes are merged or deleted."
+
+[[feature]]
 id = "organize.crop-tool"
 title = "Crop pages by dragging a rectangle"
 area = "D"
