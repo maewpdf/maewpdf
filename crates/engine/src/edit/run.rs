@@ -1028,7 +1028,13 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             // Its first drawing has room past the row, as a reveal's, so it isn't broken at the box's
             // edge before it is measured.
             let room = read.as_ref().map(|b| (b.rect[2] - b.rect[0]).abs() * 3.0 + b.size.abs() * 4.0);
-            let drawn = crate::BlockStyle { family: Some((family, false, false)), width: style.width.or(room), ..style.clone() };
+            // That room lays the row out; kept as its box, the box ran on to the page's edge (Thai edition).
+            let drawn = crate::BlockStyle {
+                family: Some((family, false, false)),
+                width: style.width.or(room),
+                fit_box: style.fit_box || (style.width.is_none() && room.is_some()),
+                ..style.clone()
+            };
             // A width or letter spacing asked for goes on the row sized to the scan, not into the
             // sizing, which undid it: drawn plain first, fitted, then given them.
             let asked = read.is_some() && (style.scale.is_some() || style.char_spacing.is_some());
@@ -1509,6 +1515,8 @@ fn fit_ocr_row(
         size: Some(size),
         width: style.width.or(Some(row * 3.0 + size * 4.0)),
         align: style.align.or(Some(crate::TextAlign::Left)),
+        // Only room, as above: a width the caller asked for stays its box.
+        fit_box: style.fit_box || style.width.is_none(),
         ..style.clone()
     };
     pdfcraft_edit::rewrite_block(doc, page, index, Some(&drawn.editor_text), &fitted)?;
@@ -1533,8 +1541,11 @@ fn reveal_covered_text(doc: &mut pdfcraft_cos::Document, page: usize, rect: [f64
         let Some((i, b)) = blocks.iter().enumerate().find(|(_, b)| b.invisible && mostly_inside(b)) else { return Ok(()) };
         // A phrase read off one line of the scan stays on one line: drawn in a real face it is
         // wider than the stretched recognised words were, and would wrap at their width.
+        // That width is room to lay the row out in, not a box for it to keep: kept, the box ran
+        // on to the page's edge, over whatever sits right of the row.
         let style = pdfcraft_edit::BlockStyle {
             width: (b.rows.len() == 1).then(|| (b.rect[2] - b.rect[0]).abs() * 3.0 + b.size.abs() * 4.0),
+            fit_box: true,
             ..Default::default()
         };
         pdfcraft_edit::rewrite_block(doc, page, i, Some(&b.editor_text), &style)?;

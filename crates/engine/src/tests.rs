@@ -15791,6 +15791,21 @@ fn a_cover_box_shows_the_recognised_text_it_covers() {
     assert_eq!(invisible(&s, "Covered"), Some(true), "one Undo");
 }
 
+/// Thai edition: recognised text a cover box draws keeps no box past its words: the room it is
+/// laid out in (three times the row) was kept as its box, which ran on to the page's edge.
+#[test]
+fn covered_recognised_text_keeps_no_box_past_its_words() {
+    let pdf = helvetica_pdf("BT /F1 24 Tf 3 Tr 60 400 Td (Covered) Tj ET");
+    let mut s = Session::new();
+    let id = s.open("ocr.pdf", None, pdf, None).unwrap();
+    let red = crate::export::encode_png(1, 1, &[255, 0, 0, 255]).unwrap();
+    s.apply(id, Edit::AddCover { page: 0, rect: [40.0, 380.0, 300.0, 440.0], bytes: Arc::new(red) }).unwrap();
+    let blocks = s.get(id).unwrap().text_blocks(0);
+    let b = blocks.iter().find(|b| b.editor_text.contains("Covered")).unwrap();
+    assert!(!b.invisible, "{b:?}");
+    assert!(b.frame.is_none_or(|f| f[2] <= b.rect[2] + 1.0), "its box ends at its text: {:?} {:?}", b.frame, b.rect);
+}
+
 /// Thai edition: colour on a part of a regular row keeps the row regular when the only complete
 /// face of its family on the page is bold (a bold title coloured in part before): the row was
 /// shaped in that face, the whole row turned bold.
