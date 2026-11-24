@@ -3,6 +3,11 @@
 //! 2026-11-16 PaddleOCR's PP-OCRv5 Thai), in ONNX form, run in this process by the same engine as
 //! the Latin models (rten). No page leaves the machine.
 //!
+//! OpenThai 2.1 adds a second recogniser, the same network trained with loopless Thai fonts as well
+//! (Kanit, Prompt, Sukhumvit Set): a line the first reads with Latin letters inside a Thai word
+//! ("lละพลNSะทU" for "และผลกระทบ") is read again with it, and the reading with fewer such letters
+//! is kept. Other lines are read once. Without its file, lines are read once, as before.
+//!
 //! Detection gives each pixel a probability of being text: the regions above [`BINARY`] are the
 //! lines. Recognition reads one line at a time: each time step of its output is a character or
 //! the CTC blank, repeats merged.
@@ -18,6 +23,8 @@ use crate::{Line, OcrError, Word};
 pub const DETECTION_MODEL: &str = "paddle-text-detection.onnx";
 pub const RECOGNITION_MODEL: &str = "openthai-thai-recognition.onnx";
 pub const DICTIONARY: &str = "openthai-thai-dict.txt";
+/// OpenThai 2.1's second recogniser, for loopless fonts (optional).
+pub const LOOPLESS_MODEL: &str = "openthai-thai-recognition-loopless.onnx";
 
 /// Longest side, in pixels, of the picture detection sees; a side is a multiple of [`STRIDE`].
 const MAX_SIDE: usize = 1920;
@@ -47,12 +54,16 @@ pub struct ThaiModels {
     pub detection: PathBuf,
     pub recognition: PathBuf,
     pub dictionary: PathBuf,
+    /// The second recogniser for loopless fonts, when its file is there.
+    pub loopless: Option<PathBuf>,
 }
 
 impl ThaiModels {
     /// The Thai models in `dir`, when all three are there.
     pub fn in_dir(dir: &Path) -> Option<ThaiModels> {
-        let models = ThaiModels { detection: dir.join(DETECTION_MODEL), recognition: dir.join(RECOGNITION_MODEL), dictionary: dir.join(DICTIONARY) };
+        let loopless = Some(dir.join(LOOPLESS_MODEL)).filter(|p| p.is_file());
+        let models =
+            ThaiModels { detection: dir.join(DETECTION_MODEL), recognition: dir.join(RECOGNITION_MODEL), dictionary: dir.join(DICTIONARY), loopless };
         (models.detection.is_file() && models.recognition.is_file() && models.dictionary.is_file()).then_some(models)
     }
 }
@@ -61,6 +72,8 @@ impl ThaiModels {
 pub struct ThaiOcr {
     detection: Model,
     recognition: Model,
+    /// The second recogniser, for lines read with Latin letters inside Thai words.
+    loopless: Option<Model>,
     /// The characters by class; class 0 is the CTC blank.
     alphabet: Vec<String>,
 }
@@ -73,7 +86,8 @@ impl ThaiOcr {
     pub fn load(models: &ThaiModels) -> Result<ThaiOcr, OcrError> {
         let load = |p: &Path| Model::load_file(p).map_err(|e| OcrError::Load(p.display().to_string(), e.to_string()));
         let text = std::fs::read_to_string(&models.dictionary).map_err(|e| OcrError::Load(models.dictionary.display().to_string(), e.to_string()))?;
-        Ok(ThaiOcr { detection: load(&models.detection)?, recognition: load(&models.recognition)?, alphabet: alphabet(&text) })
+        let loopless = models.loopless.as_deref().map(load).transpose()?;
+        Ok(ThaiOcr { detection: load(&models.detection)?, recognition: load(&models.recognition)?, loopless, alphabet: alphabet(&text) })
     }
 
     /// Recognise the text in an RGBA, RGB or grey image.
@@ -193,12 +207,26 @@ impl ThaiOcr {
                 }
             }
         }
-        let output: NdTensor<f32, 3> =
-            self.recognition.run_one(input.view().into(), None).map_err(|e| failed(&e))?.try_into().map_err(|e| failed(&e))?;
-        let picks = best_classes(output.view());
+        let read = |model: &Model| -> Result<(Vec<usize>, f32), OcrError> {
+            let output: NdTensor<f32, 3> = model.run_one(input.view().into(), None).map_err(|e| failed(&e))?.try_into().map_err(|e| failed(&e))?;
+            let picks = best_classes(output.view());
+            let sure = score(output.view(), &picks);
+            Ok((picks, sure))
+        };
+        let (mut picks, mut sure) = read(&self.recognition)?;
+        // OpenThai 2.1: Latin letters inside a Thai word are a loopless font read as look-alikes.
+        // The second recogniser reads the line again; its reading is kept when it has fewer.
+        if let Some(second) = &self.loopless {
+            let mixed = latin_in_thai(&text_of(&decode(&picks, &self.alphabet)));
+            if mixed > 0 {
+                let (again, again_sure) = read(second)?;
+                if again_sure >= DROP_SCORE && latin_in_thai(&text_of(&decode(&again, &self.alphabet))) < mixed {
+                    (picks, sure) = (again, again_sure);
+                }
+            }
+        }
         // A speck the detector took for a line (a tone mark above its word, a smudge) reads as
         // a character or two the recogniser is unsure of. PaddleOCR drops those the same way.
-        let sure = score(output.view(), &picks);
         if sure < DROP_SCORE {
             return Ok(None);
         }
@@ -208,6 +236,19 @@ impl ThaiOcr {
         }
         Ok((!words.is_empty()).then_some((Line { words }, sure)))
     }
+}
+
+/// The decoded characters as one string.
+fn text_of(chars: &[(usize, String)]) -> String {
+    chars.iter().map(|(_, c)| c.as_str()).collect()
+}
+
+/// How many Latin letters stand inside Thai words of `text`: in a word (between spaces) that also
+/// has Thai letters. A Thai line read from a loopless font has them ("lละพลNSะทU"); an English
+/// word beside a Thai one ("PDF ไฟล์") does not count.
+fn latin_in_thai(text: &str) -> usize {
+    let thai = |c: char| ('ก'..='๛').contains(&c);
+    text.split(' ').filter(|word| word.chars().any(thai)).map(|word| word.chars().filter(char::is_ascii_alphabetic).count()).sum()
 }
 
 /// A region this much shorter than the page's median line, or less, may be a mark cut off its line.
@@ -566,5 +607,24 @@ mod tests {
         let ocr = ThaiOcr::load(&models).unwrap();
         assert!(matches!(ocr.recognize(&[0; 5], 10, 10), Err(OcrError::EmptyImage)));
         assert!(matches!(ocr.recognize(&[], 0, 0), Err(OcrError::EmptyImage)));
+    }
+
+    /// Latin letters count only inside Thai words: a loopless font read as look-alikes has them,
+    /// an English word beside a Thai one does not.
+    #[test]
+    fn latin_letters_inside_thai_words_are_counted() {
+        assert_eq!(latin_in_thai("lละพลNSะทU"), 4);
+        assert_eq!(latin_in_thai("และผลกระทบ"), 0);
+        assert_eq!(latin_in_thai("ไฟล์ PDF ของ Google"), 0, "English words of their own");
+        assert_eq!(latin_in_thai("12 ก.H. 2560"), 1);
+        assert_eq!(latin_in_thai(""), 0);
+    }
+
+    /// OpenThai 2.1's second recogniser is found beside the others and loaded.
+    #[test]
+    fn the_second_recogniser_is_found_beside_the_others() {
+        let Some(models) = crate::Models::search_dirs().iter().find_map(|d| ThaiModels::in_dir(d)) else { return };
+        assert!(models.loopless.as_ref().is_some_and(|p| p.ends_with(LOOPLESS_MODEL)), "{models:?}");
+        assert!(ThaiOcr::load(&models).is_ok_and(|ocr| ocr.loopless.is_some()));
     }
 }

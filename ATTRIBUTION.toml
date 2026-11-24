@@ -3183,12 +3183,12 @@ sha256 = "864ab2f19254e6ac7240bc6a98323197332e8f714d4d3f94831f41309e5ef2f7"
 path = "crates/ui-egui/src/i18n/th.tsv"
 title = "Thai interface translation catalog"
 author = "PdfCraft contributors"
-source = "Contributor-original: clean-room translations of PdfCraft's English UI labels, no proprietary localisation resources; 2026-10-22 page-gap labels are contributor-original AI-assisted translations from English, not separately native-reviewed; 2026-10-22 secured-document notice labels are contributor-original AI-assisted translations from English, not separately native-reviewed; the 2026-10-22 reply-count label is an AI-assisted translation from English, not separately native-reviewed"
+source = "Contributor-original: clean-room translations of PdfCraft's English UI labels, no proprietary localisation resources; 2026-10-22 page-gap labels are contributor-original AI-assisted translations from English, not separately native-reviewed; 2026-10-22 secured-document notice labels are contributor-original AI-assisted translations from English, not separately native-reviewed; the 2026-10-22 reply-count label is an AI-assisted translation from English, not separately native-reviewed; the 2026-11-24 Report a problem, Resize pages and engine/system error rows (the error context) are contributor-original AI-assisted translations from English, not separately native-reviewed"
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "The Thai edition's own Thai UI strings, laid over craft-i18n's Thai catalog by crates/ui-egui/build.rs (thai_edition)"
-sha256 = "0295443fad4866f9aa377064e8e4f32ebbf3c7c395f1f5e71a20181c3e8dc029"
+sha256 = "aa688f08e852d97b9322fdec8c010929b224107a170346377e3fe3e57accb29d"
 
 [[asset]]
 path = "thai/fonts/th-sarabun-psk/THSarabunPSK-Regular.ttf"
@@ -3259,6 +3259,19 @@ licence_sha256 = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d
 kind = "model"
 usage = "Scan & OCR, Thai edition: reads Thai and Latin text (cargo xtask models)"
 sha256 = "82ec89533346faadcb30df96703dad2dd7521de65709e60d83fd9745b8968124"
+
+[[fetched]]
+file = "openthai-thai-recognition-loopless.onnx"
+url = "https://huggingface.co/iapp/OpenThai2.1-OCR-Text-20261118/resolve/c765cb8017c406ddc2a518de51db22bb2e2bbd07/rec2.onnx"
+title = "OpenThai 2.1 OCR Text second Thai line recognition model, for loopless fonts (ONNX)"
+author = "iApp Technology (OpenThai 2.1 OCR Text); base model PaddlePaddle Authors"
+source = "https://huggingface.co/iapp/OpenThai2.1-OCR-Text-20261118 (v2.1.4, revision c765cb8017c406ddc2a518de51db22bb2e2bbd07); the same network and alphabet as the main recognition model, trained with loopless Thai fonts as well; a fine-tune of PaddleOCR PP-OCRv6_tiny_rec (https://github.com/PaddlePaddle/PaddleOCR)"
+licence = "Apache-2.0"
+licence_url = "https://www.apache.org/licenses/LICENSE-2.0.txt"
+licence_sha256 = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+kind = "model"
+usage = "Scan & OCR, Thai edition: reads again a line the main model read with Latin letters inside a Thai word (loopless fonts such as Kanit, Prompt, Sukhumvit Set) (cargo xtask models)"
+sha256 = "6ec0f96f5ade665fc7eb33a9800ed055bc220870cbf963cf97c4750e64cd27ce"
 
 [[fetched]]
 file = "openthai-thai-dict.txt"
