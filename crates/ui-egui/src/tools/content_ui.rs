@@ -2109,7 +2109,9 @@ pub(crate) fn paint_look_preview(
         painter.layout(t.text.clone(), font, color, new.width().max(8.0))
     } else {
         let mut job = egui::text::LayoutJob::default();
-        job.wrap.max_width = new.width().max(8.0);
+        // Thai edition: a row of parts in several sizes stays one row, as the change will draw it.
+        // The box is sized for one size, so wrapping at it scattered the parts over rows below.
+        job.wrap.max_width = if t.text.contains('\n') { new.width().max(8.0) } else { f32::INFINITY };
         let byte = |n: usize| t.text.char_indices().nth(n).map_or(t.text.len(), |(i, _)| i);
         let mut at = 0;
         for run in runs {
@@ -2123,7 +2125,9 @@ pub(crate) fn paint_look_preview(
             let c = if preview.color.is_some() { look.color } else { run.color };
             let size = if preview.size.is_some() { look.size } else { run.size };
             let (bold, italic) = (preview.bold.unwrap_or(run.bold), preview.italic.unwrap_or(run.italic));
-            let run_font = crate::theme::document_font(ui.ctx(), look.family, bold, italic, (size as f32 * zoom).max(4.0));
+            // Each part in its own font, unless a font is previewed (Thai edition).
+            let family = if preview.family.is_some() { look.family } else { run.family.unwrap_or(look.family) };
+            let run_font = crate::theme::document_font(ui.ctx(), family, bold, italic, (size as f32 * zoom).max(4.0));
             let [r, g, b2] = c.map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8);
             job.append(
                 t.text.get(a..b).unwrap_or_default(),
