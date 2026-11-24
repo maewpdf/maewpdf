@@ -1249,7 +1249,11 @@ pub(crate) fn overlay(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, i
             // source width, and the visible frame grows/shrinks vertically with their rows.
             // An OCR phrase (several stretched words on one scanned line) also grows rightwards.
             let single_run = ed.source.as_ref().is_some_and(|(block, _)| block.rows.len() == 1 || block.invisible);
-            let width = if !ed.multiline && single_run && !ed.text.contains('\n') && ed.has_changes() {
+            // Thai edition: a look previewed from Format text (a larger font the pointer rests on)
+            // grows the box as the change would; held at the old width, its last letters dropped
+            // to a row below in the preview only.
+            let grows = ed.has_changes() || crate::content_ui::previewed_look(ui.ctx()).is_some();
+            let width = if !ed.multiline && single_run && !ed.text.contains('\n') && grows {
                 let job = editor_job(ui, ed, &ed.text, scale, f32::INFINITY);
                 let natural = ui.fonts_mut(|f| f.layout_job(job)).size().x;
                 natural.max(ed.size * 0.4).min((xf.rect.right() - ed.rect.left() - 36.0 * scale).max(ed.rect.width()))
