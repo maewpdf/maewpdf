@@ -10,8 +10,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const LABEL: Option<&str> = option_env!("PDFCRAFT_BUILD_LABEL");
 
 /// MaewPDF's own version, such as `1.0.0` (Thai edition). From 1.0.0 it counts on its own and no
-/// longer follows the upstream release it is built on, which is [`VERSION`] (shown beside it in
-/// About). `thai/VERSION` is the one place it is written; `thai/package-windows.ps1` names the
+/// longer follows the upstream release it is built on, which is [`VERSION`] (not shown: About
+/// says MaewPDF is built on PdfCraft, without a version). `thai/VERSION` is the one place it is written; `thai/package-windows.ps1` names the
 /// packages after it too. Releases before 1.0.0 were `<upstream>-th.<n>`, such as `0.21.1-th.3`.
 const EDITION_FILE: &str = include_str!("../../../thai/VERSION");
 
