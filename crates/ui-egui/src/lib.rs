@@ -537,6 +537,9 @@ pub struct PdfCraftApp {
     /// Thai edition: show the editing tips with the first document until they have been shown. The
     /// desktop app sets it; tests and embedders start without it.
     pub offer_editing_tips: bool,
+    /// Thai edition: the page tools' crosshair is drawn by the app, black with a white edge,
+    /// instead of the system's (`app::crosshair`). Off until the desktop app turns it on.
+    pub own_crosshair: bool,
     pub(crate) updates: updates::Updates,
     /// Lists the Print dialog's printers in the background (the desktop app sets it; see
     /// [`PrinterSource`]).

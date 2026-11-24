@@ -10,6 +10,8 @@ use super::*;
 mod clipboard;
 mod commands;
 mod control;
+// Thai edition: the page tools' crosshair, drawn black with a white edge.
+mod crosshair;
 mod files;
 mod frame;
 mod input;
@@ -144,6 +146,7 @@ impl PdfCraftApp {
             check_updates_at_start: true,
             editing_tips_shown: false,
             offer_editing_tips: false,
+            own_crosshair: false,
             updates: updates::Updates::default(),
             printer_source: None,
             options_source: None,
@@ -606,6 +609,7 @@ impl eframe::App for PdfCraftApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.begin_ui();
         self.guarded_frame(|app| app.ui_unguarded(ui));
+        self.draw_own_crosshair(ui.ctx());
         self.end_ui();
     }
 }

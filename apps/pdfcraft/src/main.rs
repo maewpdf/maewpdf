@@ -530,6 +530,8 @@ fn app_creator<'a>(
         app.set_startup_update_check(true);
         // The editing tips come up once, with the first document (Thai edition).
         app.offer_editing_tips = true;
+        // The page tools' crosshair, black with a white edge (Thai edition).
+        app.own_crosshair = true;
         // A portable copy is replaced by hand: its prompt opens the release's page.
         #[cfg(windows)]
         if pdfcraft_ui_egui::portable::data_dir().is_none() {
