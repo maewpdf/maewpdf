@@ -1,5 +1,5 @@
 use super::join::{check_join, join_radio_group};
-use super::look::{BorderStyle, da_string, patch_da, patch_widget_look, redraw_widgets};
+use super::look::{BorderStyle, FieldFont, da_string, patch_da, patch_widget_look, redraw_widgets};
 use super::tree::{ancestor_sets, attach, check_place, child_named, clash, detach, ensure_form, inherited, name_parts, own_inherited};
 use super::{Dict, Document, Field, FieldKind, FieldProps, FormError, MIN_FIELD_SIDE, ObjRef, Object, PdfString, fields, flags, invalid};
 
@@ -119,6 +119,14 @@ pub(crate) fn set_props_object(doc: &mut Document, name: &str, object: ObjRef, p
     set_props_target(doc, name, Some(object), props)
 }
 
+/// Thai edition: the `/DR` name of the chosen face `props` sets, written into the form first.
+fn face_resource(doc: &mut Document, props: &FieldProps) -> Result<Option<String>, FormError> {
+    match props.look.map(|l| l.font).or(props.appearance.and_then(|p| p.font)) {
+        Some(FieldFont::Face(family)) => super::tree::face_font(doc, family).map(Some),
+        _ => Ok(None),
+    }
+}
+
 fn set_props_target(doc: &mut Document, name: &str, object: Option<ObjRef>, props: &FieldProps) -> Result<String, FormError> {
     if props.font_size.is_some_and(|size| !size.is_finite() || size < 0.0) {
         return invalid("font size must be a finite, non-negative number");
@@ -191,9 +199,12 @@ fn set_props_target(doc: &mut Document, name: &str, object: Option<ObjRef>, prop
     let (new_name, join) = rename_field(doc, &all, &f, name, props)?;
     // The new default appearance when the size or the look changes.
     let size = props.font_size.unwrap_or_else(|| crate::appearance::parse_da(&f.da).size);
+    // A chosen face's font is written into the form's /DR first (Thai edition), under the name
+    // the /DA then uses.
+    let face = face_resource(doc, props)?;
     let new_da = match &props.look {
-        Some(l) => da_string(l.font, size, l.text),
-        None => patch_da(&f.da, props.font_size, &props.appearance.unwrap_or_default()),
+        Some(l) => da_string(l.font, size, l.text, face.as_deref()),
+        None => patch_da(&f.da, props.font_size, &props.appearance.unwrap_or_default(), face.as_deref()),
     };
     if props.look.is_some() || props.appearance.is_some_and(|p| p.font.is_some()) {
         ensure_form(doc)?;
@@ -319,7 +330,7 @@ fn set_props_target(doc: &mut Document, name: &str, object: Option<ObjRef>, prop
                     .map(|v| doc.resolve(&v))
                     .and_then(|v| v.as_string().map(|s| s.to_text()));
                 if let Some(da) = da {
-                    let da = patch_da(&da, props.font_size, patch);
+                    let da = patch_da(&da, props.font_size, patch, face.as_deref());
                     doc.update_dict(w.obj, |d| d.set(b"DA".to_vec(), PdfString::literal(da.into_bytes())))?;
                 }
             }

@@ -252,6 +252,70 @@ pub fn appearance_lines(lines: &[String], fonts: &mut Dict) -> (Vec<Vec<Piece>>,
     }
 }
 
+/// Thai edition: `line` split for a chosen face (a form field's font): every character `face`
+/// has is shaped with it, Thai and the rest in runs of their own so each is shaped as its script
+/// (Thai marks placed as the face lays them out, as page text is); Thai it lacks is shaped in the
+/// Thai face, and anything else is left to the standard font.
+pub fn face_pieces(line: &str, face: ShapedScript) -> Result<Vec<Piece>, GlyphError> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Seg {
+        Latin,
+        Own,
+        OwnThai,
+        Thai,
+    }
+    let seg = |c: char| match (crate::script_face_has(face, c), is_thai(c)) {
+        (true, true) => Seg::OwnThai,
+        (true, false) => Seg::Own,
+        (false, true) => Seg::Thai,
+        (false, false) => Seg::Latin,
+    };
+    let mut runs: Vec<(Seg, String)> = Vec::new();
+    for c in line.chars() {
+        let k = seg(c);
+        match runs.last_mut() {
+            Some((kind, s)) if *kind == k => s.push(c),
+            _ => runs.push((k, c.to_string())),
+        }
+    }
+    runs.into_iter()
+        .map(|(kind, s)| match kind {
+            Seg::Latin => Ok(Piece::Latin(s)),
+            Seg::Own | Seg::OwnThai => crate::shape_face(&s, face, kind == Seg::OwnThai).map(Piece::Shaped),
+            Seg::Thai => shape_thai(&s).map(Piece::Shaped),
+        })
+        .collect()
+}
+
+/// [`appearance_lines`] for lines drawn in a chosen face ([`face_pieces`]). A line the face can't
+/// shape is drawn as [`appearance_lines`] draws it.
+pub fn face_appearance_lines(lines: &[String], face: ShapedScript, fonts: &mut Dict) -> (Vec<Vec<Piece>>, ShapedFonts) {
+    let fallback = |l: &String| {
+        if l.chars().any(is_thai) { thai_pieces(l).unwrap_or_else(|_| vec![Piece::Latin(l.clone())]) } else { vec![Piece::Latin(l.clone())] }
+    };
+    let pieces: Vec<Vec<Piece>> = lines.iter().map(|l| face_pieces(l, face).unwrap_or_else(|_| fallback(l))).collect();
+    match ShapedFonts::new(clusters(pieces.iter().map(Vec::as_slice)), shaped_glyph, &Dict::new(), fonts, "PCTh", &mut |o| o).map_err(|(e, _)| e) {
+        Ok(shaped) => (pieces, shaped),
+        Err(_) => appearance_lines(lines, fonts),
+    }
+}
+
+/// How far the shaped glyphs of `pieces` reach below and above the baseline, in em units; `None`
+/// when nothing in them is shaped or a glyph can't be read.
+pub fn pieces_reach(pieces: &[Piece]) -> Option<[f64; 2]> {
+    let mut reach: Option<[f64; 2]> = None;
+    for c in clusters([pieces]) {
+        for (id, [_, dy]) in &c.glyphs {
+            let g = shaped_glyph(c.script, *id).ok()?;
+            if !g.contours.is_empty() {
+                let b = [g.bbox[1] + dy, g.bbox[3] + dy];
+                reach = Some(reach.map_or(b, |r| [r[0].min(b[0]), r[1].max(b[1])]));
+            }
+        }
+    }
+    reach
+}
+
 /// How far the Thai glyphs of `line` reach below and above its baseline, in em units; `None`
 /// without Thai, or with Thai the face can't draw.
 pub fn thai_reach(line: &str) -> Option<[f64; 2]> {

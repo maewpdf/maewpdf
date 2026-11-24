@@ -361,6 +361,11 @@ fn dr_font(doc: &Document, name: &str) -> Option<(Object, FontText)> {
     let entry = fonts.as_dict()?.get(name.as_bytes())?.clone();
     let font = doc.resolve(&entry);
     let fd = font.as_dict()?;
+    // A font PdfCraft wrote for a chosen face (Thai edition) names the face, which draws the text
+    // ([`dr_face`]); what the dictionary itself would show is a stand-in for other viewers.
+    if fd.contains(FACE_KEY) {
+        return None;
+    }
     match fd.name(b"Subtype") {
         Some(b"Type1" | b"TrueType" | b"MMType1") => {}
         // Japanese, Chinese and Korean forms: a CID font addressed by Unicode (a non-embedded
@@ -374,6 +379,45 @@ fn dr_font(doc: &Document, name: &str) -> Option<(Object, FontText)> {
         return None;
     }
     Some((entry, FontText::Simple(Box::new(Metrics::from_dict(doc, fd)))))
+}
+
+/// Thai edition: the key a `/DR` font PdfCraft wrote for a chosen face records the face's family
+/// name in (a text string). The face is looked up by that name among the families this build or
+/// this machine has; the name is never used as a path.
+pub(crate) const FACE_KEY: &[u8] = b"PCFamily";
+
+/// Thai edition: the face the `/DR` font `name` was written for, when this build or this machine
+/// has it.
+fn dr_face(doc: &Document, name: &str) -> Option<pdfcraft_fonts::ShapedScript> {
+    dr_face_family(doc, name).map(|(_, face)| face)
+}
+
+/// [`dr_face`] with the family's name as the family records it.
+pub(crate) fn dr_face_family(doc: &Document, name: &str) -> Option<(&'static str, pdfcraft_fonts::ShapedScript)> {
+    let af = acroform(doc)?;
+    let dr = doc.resolve(af.get(b"DR")?);
+    let fonts = doc.resolve(dr.as_dict()?.get(b"Font")?);
+    let font = doc.resolve(fonts.as_dict()?.get(name.as_bytes())?);
+    let family = doc.resolve(font.as_dict()?.get(FACE_KEY)?).as_string()?.to_text();
+    pdfcraft_fonts::family_face(&family)
+}
+
+/// [`dr_face`] for field `f`'s font `name`; none for a comb field, whose cells hold a character each.
+fn field_face(doc: &Document, f: &Field, name: &str) -> Option<pdfcraft_fonts::ShapedScript> {
+    if f.is_comb() { None } else { dr_face(doc, name) }
+}
+
+/// Thai edition: whether every line of `text` can be drawn in `face`: its characters are the
+/// face's, Thai, or WinAnsi.
+fn face_draws(face: pdfcraft_fonts::ShapedScript, text: &str) -> bool {
+    text.split(['\n', '\r']).all(|line| {
+        shaped_text::face_pieces(line, face).is_ok_and(|pieces| {
+            pieces.iter().all(|p| match p {
+                Piece::Latin(s) => pdfcraft_fonts::first_non_win_ansi(s).is_none(),
+                Piece::Shaped(_) => true,
+            })
+        })
+    })
 }
 
 /// A push button's caption, centered in a `width` × `height` box, in the font, size and color its
@@ -760,6 +804,9 @@ pub fn value_overflow(doc: &Document, f: &Field, w: &Widget) -> Option<Overflow>
 /// holds it, as [`field_appearance_fit`] picks, or else in the Helvetica (WinAnsi) stand-in.
 fn draws(doc: &Document, f: &Field, wd: &Dict, text: &str) -> bool {
     let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
+    if let Some(face) = dr_face(doc, &da.font) {
+        return face_draws(face, text);
+    }
     let enc = dr_font(doc, &da.font).map(|(_, enc)| enc).filter(|enc| enc.can_encode(text)).unwrap_or(FontText::WinAnsi);
     enc.first_unencodable(text).is_none()
 }
@@ -774,6 +821,10 @@ pub(crate) fn thai_refusal(doc: &Document, f: &Field, text: &str) -> Option<Stri
     let held = |w: &Widget| {
         let wd = doc.get(w.obj).as_dict().cloned().unwrap_or_default();
         let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
+        // A chosen face draws its own Thai (Thai edition).
+        if let Some(face) = dr_face(doc, &da.font) {
+            return face_draws(face, text);
+        }
         dr_font(doc, &da.font).is_some_and(|(_, enc)| matches!(enc, FontText::Simple(_)) && text.split(['\n', '\r']).all(|l| enc.can_encode(l)))
     };
     if f.widgets.iter().all(held) { None } else { shaped_text::thai_refusal(text) }
@@ -820,9 +871,14 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
         }
     };
     let dr = dr_font(doc, &da.font);
+    // A chosen face (Thai edition: TH Sarabun PSK or an installed font) draws every character it
+    // has, Latin and Thai alike, shaped as page text is so Thai marks sit where the face puts them;
+    // Helvetica draws the rest.
+    let face = field_face(doc, f, &da.font);
     // Thai the form's font can't hold (it isn't a simple font encoding it) is drawn from the Thai
     // face, as Add text draws it: Type 3 glyphs beside the form's font, which draws the rest. One
     // line of a text field or combo box at a time; the `/DA` is kept.
+    // (A chosen face's font isn't one `dr_font` reads: with a face, `dr` is `None`.)
     let thai = matches!(f.kind, FieldKind::Text | FieldKind::Combo)
         && !f.is_comb()
         && text.chars().any(shaped_text::is_thai)
@@ -833,11 +889,11 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
         Some((o, enc)) => (da.font.clone(), o, enc),
         None => ("Helv".to_string(), helvetica(), FontText::WinAnsi),
     };
-    let width_of =
-        |text: &str, size: f64| if thai { shaped_text::thai_width(text, size, |s, size| enc.width(s, size)) } else { enc.width(text, size) };
+    let shaping = Shaping::of(face, thai);
+    let width_of = |text: &str, size: f64| shaping.width(text, size, &enc);
     // How far a line's ink reaches below and above its baseline (em), where Thai stacks or
     // descenders reach past the form font's (Helvetica's) -0.207 and 0.718; `None` otherwise.
-    let thai_ink = |line: &str| thai.then(|| shaped_text::thai_reach(line)).flatten().map(|[lo, hi]| [lo.min(-0.207), hi.max(0.718)]);
+    let thai_ink = |line: &str| shaping.reach(line).map(|[lo, hi]| [lo.min(-0.207), hi.max(0.718)]);
     let (mut c, bw) = frame(doc, &wd, width, height);
     let pad = 2.0 + bw;
     let inner_w = (width - 2.0 * pad).max(1.0);
@@ -952,7 +1008,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
             }
         }
     }
-    let (body, fonts, unencodable) = draw_lines(&shown, size, &font_name, font_obj, &enc, thai);
+    let (body, fonts, unencodable) = draw_lines(&shown, size, &font_name, font_obj, &enc, shaping);
     // Acrobat regenerates only what is inside /Tx BMC when it redraws a field (e.g. on focus
     // changes), discarding what came before it (issues #1613, #633). The background and border
     // therefore go inside the marked-content block too, so a redraw keeps them with the text.
@@ -981,18 +1037,65 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     (Stream::flate(d, &content), unencodable, overflow)
 }
 
+/// What [`draw_lines`] shapes: nothing, Thai beside the field's font, or everything a chosen face
+/// has (Thai edition).
+#[derive(Clone, Copy)]
+enum Shaping {
+    None,
+    Thai,
+    Face(pdfcraft_fonts::ShapedScript),
+}
+
+impl Shaping {
+    fn of(face: Option<pdfcraft_fonts::ShapedScript>, thai: bool) -> Self {
+        match face {
+            Some(face) => Shaping::Face(face),
+            None if thai => Shaping::Thai,
+            None => Shaping::None,
+        }
+    }
+
+    /// The width of `text` at `size`, the standard font's parts measured with `enc`.
+    fn width(self, text: &str, size: f64, enc: &FontText) -> f64 {
+        match self {
+            Shaping::Face(face) => shaped_text::face_pieces(text, face)
+                .map(|p| shaped_text::pieces_width(&p, size, 0.0, |s, size| enc.width(s, size)))
+                .unwrap_or_else(|_| enc.width(text, size)),
+            Shaping::Thai => shaped_text::thai_width(text, size, |s, size| enc.width(s, size)),
+            Shaping::None => enc.width(text, size),
+        }
+    }
+
+    /// How far the shaped glyphs of `line` reach below and above the baseline (em); `None` with
+    /// nothing shaped.
+    fn reach(self, line: &str) -> Option<[f64; 2]> {
+        match self {
+            Shaping::Face(face) => shaped_text::face_pieces(line, face).ok().and_then(|p| shaped_text::pieces_reach(&p)),
+            Shaping::Thai => shaped_text::thai_reach(line),
+            Shaping::None => None,
+        }
+    }
+}
+
 /// The text operators for the `shown` lines (where each starts, and what it says) at `size`, in
 /// the field's font `font_name` (`font`, written with `enc`) and, with `thai`, their Thai from the
 /// Thai face; the font resources they use, and the first character drawn as `?` because the
 /// font can't hold it, for the caller to report.
-fn draw_lines(shown: &[(f64, f64, String)], size: f64, font_name: &str, font: Object, enc: &FontText, thai: bool) -> (Vec<u8>, Dict, Option<char>) {
+fn draw_lines(
+    shown: &[(f64, f64, String)],
+    size: f64,
+    font_name: &str,
+    font: Object,
+    enc: &FontText,
+    shaping: Shaping,
+) -> (Vec<u8>, Dict, Option<char>) {
     let mut fonts = Dict::new();
     fonts.set(font_name.as_bytes().to_vec(), font);
     let lines: Vec<String> = shown.iter().map(|(_, _, text)| text.clone()).collect();
-    let (pieces, shaped) = if thai {
-        shaped_text::appearance_lines(&lines, &mut fonts)
-    } else {
-        (lines.into_iter().map(|l| vec![Piece::Latin(l)]).collect(), ShapedFonts::default())
+    let (pieces, shaped) = match shaping {
+        Shaping::Thai => shaped_text::appearance_lines(&lines, &mut fonts),
+        Shaping::Face(face) => shaped_text::face_appearance_lines(&lines, face, &mut fonts),
+        Shaping::None => (lines.into_iter().map(|l| vec![Piece::Latin(l)]).collect(), ShapedFonts::default()),
     };
     let mut body = Vec::new();
     let mut current = None;

@@ -42,7 +42,10 @@ impl LookPatch {
 /// fill colour (`g`, `rg` or `k`), appending one when the string has none. Everything else (a
 /// custom font resource, colour space or other graphics state) is kept, and repeated edits don't
 /// grow the string.
-pub(super) fn patch_da(da: &str, size: Option<f64>, patch: &LookPatch) -> String {
+///
+/// `face` is the `/DR` resource name written for a chosen face ([`FieldFont::Face`],
+/// [`super::tree::face_font`]); the standard fonts have names of their own.
+pub(super) fn patch_da(da: &str, size: Option<f64>, patch: &LookPatch, face: Option<&str>) -> String {
     if patch.font.is_none() && size.is_none() && patch.text.is_none() {
         return da.to_string();
     }
@@ -50,7 +53,7 @@ pub(super) fn patch_da(da: &str, size: Option<f64>, patch: &LookPatch) -> String
     let numeric = |s: &str| s.parse::<f64>().is_ok();
     if patch.font.is_some() || size.is_some() {
         let old = appearance::parse_da(da);
-        let font = patch.font.map_or_else(|| old.font.clone(), |f| f.resource().to_string());
+        let font = patch.font.map_or_else(|| old.font.clone(), |f| f.resource(face).to_string());
         // `parse_da` reads sizes up to 300 points; keep the same bound when writing.
         let size = appearance::fmt(size.unwrap_or(old.size).clamp(0.0, 300.0));
         let at = toks.iter().enumerate().rev().find(|(i, t)| t.as_str() == "Tf" && *i >= 2).map(|(i, _)| i);
@@ -173,16 +176,24 @@ pub enum FieldFont {
     Helvetica,
     Times,
     Courier,
+    /// Thai edition: a document family by name (TH Sarabun PSK, or a font installed on this
+    /// machine), as Add text offers them. The field's text is drawn from that face, Thai shaped
+    /// as page text is; the form's `/DR` names the font for other viewers without embedding it.
+    Face(&'static str),
 }
 
 impl FieldFont {
+    /// The standard fonts, which every viewer has.
     pub const ALL: [FieldFont; 3] = [FieldFont::Helvetica, FieldFont::Times, FieldFont::Courier];
 
-    fn resource(self) -> &'static str {
+    /// The `/DR` resource name: Acrobat's for the standard fonts, else `face` (the name written
+    /// for the chosen face), else Helvetica's.
+    fn resource(self, face: Option<&str>) -> &str {
         match self {
             FieldFont::Helvetica => "Helv",
             FieldFont::Times => "TiRo",
             FieldFont::Courier => "Cour",
+            FieldFont::Face(_) => face.unwrap_or("Helv"),
         }
     }
 
@@ -191,7 +202,20 @@ impl FieldFont {
             FieldFont::Helvetica => "Helvetica",
             FieldFont::Times => "Times Roman",
             FieldFont::Courier => "Courier",
+            FieldFont::Face(family) => family,
         }
+    }
+
+    /// Thai edition: the font a name picks: a standard font by its label or resource name (any
+    /// case), else a document family this build or this machine has.
+    pub fn from_name(name: &str) -> Option<FieldFont> {
+        let want = name.trim();
+        let standard = FieldFont::ALL.into_iter().find(|f| {
+            f.label().eq_ignore_ascii_case(want)
+                || f.resource(None).eq_ignore_ascii_case(want)
+                || (*f == FieldFont::Times && want.eq_ignore_ascii_case("times"))
+        });
+        standard.or_else(|| pdfcraft_fonts::family_face(want).map(|(family, _)| FieldFont::Face(family)))
     }
 }
 
@@ -291,15 +315,19 @@ pub fn look(doc: &Document, f: &Field) -> Look {
         font: match parsed.font.as_str() {
             "TiRo" | "Times-Roman" => FieldFont::Times,
             "Cour" | "Courier" => FieldFont::Courier,
-            _ => FieldFont::Helvetica,
+            // A font written for a chosen face, when this build or this machine has it (Thai
+            // edition); without it the field is drawn in Helvetica.
+            other => crate::appearance::dr_face_family(doc, other).map_or(FieldFont::Helvetica, |(family, _)| FieldFont::Face(family)),
         },
     }
 }
 
 /// A `/DA` string with the given font, size and colour.
-pub(super) fn da_string(font: FieldFont, size: f64, c: [f64; 3]) -> String {
+///
+/// `face` is as for [`patch_da`].
+pub(super) fn da_string(font: FieldFont, size: f64, c: [f64; 3], face: Option<&str>) -> String {
     let f = crate::appearance::fmt;
-    format!("/{} {} Tf {} {} {} rg", font.resource(), f(size.clamp(0.0, 100.0)), f(c[0]), f(c[1]), f(c[2]))
+    format!("/{} {} Tf {} {} {} rg", font.resource(face), f(size.clamp(0.0, 100.0)), f(c[0]), f(c[1]), f(c[2]))
 }
 
 /// Regenerate every widget appearance of a field from its current value and settings. A value or

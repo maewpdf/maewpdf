@@ -316,6 +316,60 @@ fn glyph(font: &FontRef, id: u32) -> Result<GlyphOutline, GlyphError> {
     crate::script::bounded_outline(font, gid, width)
 }
 
+/// Thai edition: what a font dictionary naming a face (not embedding it) records, in 1000ths of
+/// an em: the WinAnsi widths of codes 32–255 (0 for codes WinAnsi leaves unused), the ascent,
+/// descent and cap height, and the bounding box.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FaceMetrics {
+    pub widths: Vec<f64>,
+    pub ascent: f64,
+    pub descent: f64,
+    pub cap_height: f64,
+    pub bbox: [f64; 4],
+}
+
+/// [`FaceMetrics`] of the face behind `script`; `None` without the face.
+pub fn face_metrics(script: ShapedScript) -> Option<FaceMetrics> {
+    let (font, _) = face(script)?;
+    let loc = LocationRef::default();
+    let m = font.metrics(Size::unscaled(), loc);
+    let scale = 1000.0 / f64::from(m.units_per_em.max(1));
+    let charmap = font.charmap();
+    let advances = font.glyph_metrics(Size::unscaled(), loc);
+    let widths = (32..=255usize)
+        .map(|code| {
+            let c = crate::encodings::WIN_ANSI.get(code).copied().filter(|u| *u != 0).and_then(char::from_u32);
+            c.and_then(|c| charmap.map(c)).and_then(|g| advances.advance_width(g)).map_or(0.0, |w| (f64::from(w) * scale).round())
+        })
+        .collect();
+    let b = m.bounds.map_or([0.0, f64::from(m.descent), 1000.0 / scale, f64::from(m.ascent)], |b| {
+        [f64::from(b.x_min), f64::from(b.y_min), f64::from(b.x_max), f64::from(b.y_max)]
+    });
+    Some(FaceMetrics {
+        widths,
+        ascent: (f64::from(m.ascent) * scale).round(),
+        descent: (f64::from(m.descent) * scale).round(),
+        cap_height: (f64::from(m.cap_height.unwrap_or(m.ascent * 0.7)) * scale).round(),
+        bbox: b.map(|v| (v * scale).round()),
+    })
+}
+
+/// Thai edition: the regular face of the document family called `name` (any case): a
+/// craft-fonts family this build has, else a family installed on this machine, with the name as
+/// the family records it. For a name read from a file, which is looked up and never used as a
+/// path.
+pub fn family_face(name: &str) -> Option<(&'static str, ShapedScript)> {
+    let want = name.trim();
+    if let Some(family) = crate::CRAFT_FONTS.iter().map(|f| f.family).find(|f| f.eq_ignore_ascii_case(want))
+        && let Some(face) = document_family_font(family, false, false)
+    {
+        return Some((family, face));
+    }
+    let index = crate::installed_family(want)?;
+    let family = crate::installed_families().get(usize::from(index))?;
+    Some((family.name, crate::installed_face(index, false, false)?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

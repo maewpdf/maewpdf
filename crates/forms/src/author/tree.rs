@@ -43,6 +43,68 @@ pub(crate) fn ensure_form(doc: &mut Document) -> Result<ObjRef, FormError> {
     Ok(r)
 }
 
+/// Thai edition: the `/DR` resource name of the font for the document family `family` (TH Sarabun
+/// PSK, or a font installed on this machine), writing it into the form first when the form has
+/// none. The font names the face and records its widths and metrics, as a TrueType font that
+/// isn't embedded (ISO 32000-2 §9.6.3), so other viewers can stand a font in for it; PdfCraft
+/// draws the field from the face itself, found again by the family name under
+/// [`crate::appearance::FACE_KEY`]. A name a font of the form already has is never reused.
+pub(crate) fn face_font(doc: &mut Document, family: &str) -> Result<String, FormError> {
+    let Some((family, face)) = pdfcraft_fonts::family_face(family) else {
+        return Err(FormError::Invalid(format!(
+            "the font \"{family}\" is not available: use Helvetica, Times Roman, Courier, TH Sarabun PSK or a font installed on this computer"
+        )));
+    };
+    let metrics = pdfcraft_fonts::face_metrics(face).ok_or_else(|| FormError::Invalid(format!("the font \"{family}\" can't be read")))?;
+    let r = ensure_form(doc)?;
+    let mut af = doc.get(r).as_dict().cloned().unwrap_or_default();
+    let (dr, mut fonts) = form_fonts(doc, &af);
+    let recorded = |o: &Object| {
+        doc.resolve(o)
+            .as_dict()
+            .and_then(|d| d.get(crate::appearance::FACE_KEY).map(|v| doc.resolve(v)))
+            .and_then(|v| v.as_string().map(|s| s.to_text()))
+    };
+    if let Some((name, _)) = fonts.iter().find(|(_, v)| recorded(v).is_some_and(|f| f.eq_ignore_ascii_case(family))) {
+        return Ok(String::from_utf8_lossy(name).into_owned());
+    }
+    let base: String = family.chars().filter(char::is_ascii_alphanumeric).collect();
+    let base = if base.is_empty() { "Face".to_string() } else { base };
+    let mut name = format!("PC{base}");
+    let mut suffix = 1usize;
+    while fonts.contains(name.as_bytes()) {
+        suffix = suffix.saturating_add(1);
+        name = format!("PC{base}_{suffix}");
+    }
+    let mut fd = Dict::new();
+    fd.set(b"Type".to_vec(), Object::name("FontDescriptor"));
+    fd.set(b"FontName".to_vec(), Object::name(&base));
+    // Nonsymbolic: its Latin characters are WinAnsi's.
+    fd.set(b"Flags".to_vec(), Object::Int(32));
+    fd.set(b"FontBBox".to_vec(), Object::Array(metrics.bbox.iter().map(|v| Object::Real(*v)).collect()));
+    fd.set(b"ItalicAngle".to_vec(), Object::Int(0));
+    fd.set(b"Ascent".to_vec(), Object::Real(metrics.ascent));
+    fd.set(b"Descent".to_vec(), Object::Real(metrics.descent));
+    fd.set(b"CapHeight".to_vec(), Object::Real(metrics.cap_height));
+    fd.set(b"StemV".to_vec(), Object::Int(80));
+    let fd = doc.add(Object::Dict(fd));
+    let mut font = Dict::new();
+    font.set(b"Type".to_vec(), Object::name("Font"));
+    font.set(b"Subtype".to_vec(), Object::name("TrueType"));
+    font.set(b"BaseFont".to_vec(), Object::name(&base));
+    font.set(b"FirstChar".to_vec(), Object::Int(32));
+    font.set(b"LastChar".to_vec(), Object::Int(255));
+    font.set(b"Widths".to_vec(), Object::Array(metrics.widths.iter().map(|w| Object::Real(*w)).collect()));
+    font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+    font.set(b"FontDescriptor".to_vec(), Object::Ref(fd));
+    font.set(crate::appearance::FACE_KEY.to_vec(), PdfString::text(family));
+    let font = doc.add(Object::Dict(font));
+    fonts.set(name.as_bytes().to_vec(), Object::Ref(font));
+    store_form_fonts(doc, &mut af, dr, fonts);
+    doc.set(r, Object::Dict(af));
+    Ok(name)
+}
+
 /// The form dictionary's `/DR` and its `/Font` dictionary, resolved (empty where missing).
 fn form_fonts(doc: &Document, af: &Dict) -> (Dict, Dict) {
     let dr = af.get(b"DR").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();

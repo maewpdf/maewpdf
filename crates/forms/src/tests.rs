@@ -2452,6 +2452,53 @@ fn appearance_properties_restyle_every_widget() {
     assert!(!a.contains(" re S") && a.contains(" l S"), "underline only: {a}");
 }
 
+/// Thai edition: a field set in a document family (TH Sarabun PSK) draws all of its text from
+/// that face, Latin too, not in Helvetica beside it; the form's /DR names the font once, with
+/// widths, for other viewers; and the field reads back as set in that family after a save.
+#[test]
+fn thai_a_field_in_a_chosen_face_draws_all_its_text_from_it() {
+    let Some((family, _)) = pdfcraft_fonts::family_face("TH Sarabun PSK") else {
+        return; // built without craft-fonts
+    };
+    let mut doc = one_page();
+    add_field(&mut doc, 0, [50.0, 700.0, 300.0, 724.0], &NewField::Text { multiline: false }, Some("name")).unwrap();
+    let patch = LookPatch { font: Some(FieldFont::Face(family)), ..LookPatch::default() };
+    set_props(&mut doc, "name", &FieldProps { appearance: Some(patch), ..FieldProps::default() }).unwrap();
+    set_value(&mut doc, "name", &FieldValue::Text("Ada ผู้ใหญ่".into())).unwrap();
+    // Set again: the font it has is used, not written a second time.
+    set_props(&mut doc, "name", &FieldProps { appearance: Some(patch), ..FieldProps::default() }).unwrap();
+    let doc = reopen(&doc);
+    let f = field(&fields(&doc), "name").clone();
+    assert_eq!(look(&doc, &f).font, FieldFont::Face(family));
+    let a = ap(&doc, &f.widgets[0]);
+    assert!(!a.contains("(Ada"), "Latin is drawn from the face, not the standard font: {a}");
+    assert!(a.contains("/PCTh"), "shaped glyphs: {a}");
+    let af = crate::acroform(&doc).unwrap();
+    let dr = doc.resolve(af.get(b"DR").unwrap()).as_dict().cloned().unwrap();
+    let fonts = doc.resolve(dr.get(b"Font").unwrap()).as_dict().cloned().unwrap();
+    let faces: Vec<_> = fonts.iter().filter(|(_, v)| doc.resolve(v).as_dict().is_some_and(|d| d.contains(b"PCFamily"))).collect();
+    assert_eq!(faces.len(), 1, "one font for the family: {fonts:?}");
+    let font = doc.resolve(faces[0].1).as_dict().cloned().unwrap();
+    assert_eq!(font.name(b"Subtype"), Some(b"TrueType".as_slice()));
+    let widths = doc.resolve(font.get(b"Widths").unwrap()).as_array().map(|w| w.len());
+    assert_eq!(widths, Some(224), "a width for each code 32-255");
+    assert!(f.da.contains(&format!("/{}", String::from_utf8_lossy(faces[0].0))), "{}", f.da);
+}
+
+/// Thai edition: a font name for a field picks a standard font or a document family; a family
+/// neither this build nor this machine has is refused with the fonts that can be used.
+#[test]
+fn thai_a_field_font_is_named_by_family() {
+    assert_eq!(FieldFont::from_name("times"), Some(FieldFont::Times));
+    assert_eq!(FieldFont::from_name("Courier"), Some(FieldFont::Courier));
+    assert_eq!(FieldFont::from_name("No Such Font 123"), None);
+    let mut doc = one_page();
+    add_field(&mut doc, 0, [50.0, 700.0, 300.0, 724.0], &NewField::Text { multiline: false }, Some("name")).unwrap();
+    let patch = LookPatch { font: Some(FieldFont::Face("No Such Font 123")), ..LookPatch::default() };
+    let e = set_props(&mut doc, "name", &FieldProps { appearance: Some(patch), ..FieldProps::default() }).unwrap_err();
+    assert!(e.to_string().contains("not available"), "{e}");
+}
+
 #[test]
 fn tab_order_follows_the_page_setting() {
     let mut doc = one_page();
