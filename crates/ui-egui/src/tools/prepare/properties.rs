@@ -1,6 +1,6 @@
 use super::draft::{FieldDraft, FieldTab};
 use super::tabs::{actions_tab, calculate_tab, format_tab, validate_tab};
-use super::{BorderStyle, FieldFont, FormFieldKind, theme, widgets};
+use super::{BorderStyle, FormFieldKind, theme, widgets};
 use crate::widgets::Tip as _;
 
 /// A check box for a `/Ff` bit (`inverted`: checked when the bit is clear).
@@ -88,11 +88,8 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                     ui.end_row();
                     if let Some(l) = d.look.as_mut() {
                         ui.label(tl!("Font:"));
-                        craft_ui::ComboBox::from_id_salt("field-font").selected_text(l.font.label()).show_ui(ui, |ui| {
-                            for f in FieldFont::ALL {
-                                ui.selectable_value(&mut l.font, f, f.label());
-                            }
-                        });
+                        // The Add text font menu (Thai edition): search, TH marks, installed fonts.
+                        crate::content_ui::field_font_menu(ui, "field-font", &mut l.font, None);
                         ui.end_row();
                         ui.label(tl!("Text Color:"));
                         if let Some(c) = crate::comments::swatch_grid(ui, Some(l.text)) {

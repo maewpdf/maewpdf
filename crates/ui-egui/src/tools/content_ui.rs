@@ -1752,6 +1752,42 @@ pub(crate) fn family_menu(ui: &mut egui::Ui, family: &mut FontFamily) {
         });
 }
 
+/// A form field's font (Thai edition): the Add text font menu, with its search box, TH marks and
+/// the fonts installed on this machine, for Prepare Form. True when another font was picked.
+/// `shown` is the menu's text when it isn't the font's name (several fields with different fonts).
+pub(crate) fn field_font_menu(ui: &mut egui::Ui, salt: &str, font: &mut pdfcraft_engine::FieldFont, shown: Option<&str>) -> bool {
+    use pdfcraft_engine::FieldFont;
+    let current = match *font {
+        FieldFont::Helvetica => Some(FontFamily::Helvetica),
+        FieldFont::Times => Some(FontFamily::Times),
+        FieldFont::Courier => Some(FontFamily::Courier),
+        FieldFont::Face(name) => FontFamily::from_name(name),
+    };
+    let search_id = ui.make_persistent_id((salt, "search"));
+    let mut picked = None;
+    craft_ui::ComboBox::from_id_salt(salt)
+        .selected_text(shown.unwrap_or(font.label()))
+        .width(180.0)
+        .height(360.0)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show_ui(ui, |ui| {
+            picked = family_list(ui, search_id, current, &mut None);
+        });
+    let new = match picked {
+        Some(FontFamily::Helvetica) => FieldFont::Helvetica,
+        Some(FontFamily::Times) => FieldFont::Times,
+        Some(FontFamily::Courier) => FieldFont::Courier,
+        Some(f) => match FieldFont::from_name(f.label()) {
+            Some(new) => new,
+            None => return false,
+        },
+        None => return false,
+    };
+    let changed = new != *font;
+    *font = new;
+    changed
+}
+
 /// The font of a text comment or Fill & Sign text (Thai edition): the font menu, then Bold and
 /// Italic. True when one changed.
 pub(crate) fn text_font_controls(ui: &mut egui::Ui, font: &mut pdfcraft_engine::TextFont, box_size: f32) -> bool {
