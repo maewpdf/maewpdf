@@ -1674,6 +1674,16 @@ fn tips(ctx: &egui::Context, tab: usize) -> Vec<Tip> {
             tip("text-select", command("ocr.correct"), tl!("Go through the words it wasn't sure of, one by one."), String::new()),
         ],
         _ => vec![
+            // Thai edition: split view (the owner asked for its keys here).
+            tip(
+                "columns-2",
+                command("view.split"),
+                &crate::i18n::fmt(
+                    tl!("Two pages or two files side by side. Or right-click a tab › {right} / {down}. The same keys end it."),
+                    &[("right", tl!("Split right")), ("down", tl!("Split down"))],
+                ),
+                keys("view.split"),
+            ),
             tip("moon", tl!("Light or dark").into(), tl!("Click the theme button at the top right."), String::new()),
             tip("zoom-in", tl!("Zoom").into(), tl!("Hold the key and roll the mouse wheel."), format!("{ctrl} + {}", tl!("wheel"))),
             tip(

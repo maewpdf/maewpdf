@@ -3280,3 +3280,7 @@ error	the paragraph is already behind everything on the page	ย่อหน้�
 error	only a text box can become text of the page	รวมเข้าเป็นข้อความของหน้าได้เฉพาะกล่องข้อความ
 error	complex text needs the complete source TrueType/OpenType face; load that font before editing	ข้อความภาษานี้ต้องใช้ไฟล์ฟอนต์ต้นฉบับแบบเต็ม ให้โหลดฟอนต์นั้นก่อนแก้ไข
 error	the selected font has no usable TrueType/CFF outlines and metrics	ฟอนต์ที่เลือกไม่มีข้อมูลรูปตัวอักษรที่ใช้ได้
+@id	view.split	แบ่งจอ
+	Split right	แบ่งจอไปทางขวา
+	Split down	แบ่งจอลงล่าง
+	Two pages or two files side by side. Or right-click a tab › {right} / {down}. The same keys end it.	ดูสองหน้าหรือสองไฟล์ข้างกัน หรือคลิกขวาที่แท็บ › {right} / {down} กดคีย์เดิมอีกครั้งเพื่อปิด

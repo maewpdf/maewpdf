@@ -3188,7 +3188,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "The Thai edition's own Thai UI strings, laid over craft-i18n's Thai catalog by crates/ui-egui/build.rs (thai_edition)"
-sha256 = "aa688f08e852d97b9322fdec8c010929b224107a170346377e3fe3e57accb29d"
+sha256 = "f0f84f4bf25e45438e389b988ecee4c4a414b5f82bc2ab79ae1d9e34e7899d99"
 
 [[asset]]
 path = "thai/fonts/th-sarabun-psk/THSarabunPSK-Regular.ttf"

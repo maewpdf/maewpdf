@@ -1591,3 +1591,13 @@ fn thai_is_the_editions_catalog_over_craft_i18ns() {
         assert_eq!(tr(th, "Window"), "หน้าต่าง");
     }
 }
+
+/// Thai edition: View ▸ Split reads "แบ่งจอ" (split the screen), while the other commands named
+/// "Split" (splitting a document) keep "แบ่ง".
+#[test]
+fn split_view_is_split_screen_in_thai() {
+    let th = Lang::from_code("th").expect("th registered");
+    assert_eq!(tr_id(th, "view.split", "Split"), "แบ่งจอ");
+    assert_eq!(tr(th, "Split"), "แบ่ง");
+    assert_eq!(tr(th, "Split right"), "แบ่งจอไปทางขวา");
+}
