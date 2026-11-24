@@ -7333,6 +7333,28 @@ fn tab_order_and_field_appearance_through_tools() {
     ));
 }
 
+/// Thai edition: a form field's font can be a document family (TH Sarabun PSK, or a font installed
+/// on this machine) by name, as Add text takes it; Thai filled into it reads back as typed, and a
+/// family that isn't here is refused with the fonts that can be used.
+#[test]
+fn a_form_field_takes_a_document_family_through_tools() {
+    if pdfcraft_engine::FontFamily::Sarabun.craft(false, false).is_none() {
+        return; // built without craft-fonts
+    }
+    let dir = workdir("field-family");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [10, 20, 200, 44], "name": "A" }));
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "A", "appearance": { "font": "sarabun" } }));
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "A": "ผู้ใหญ่ Ada" } }));
+    let text = page_text(&mut a, doc)[0].clone();
+    assert!(text.contains("ผู้ใหญ่") && text.contains("Ada"), "{text}");
+    match a.call("form_set_props", &json!({ "doc": doc, "field": "A", "appearance": { "font": "No Such Font 123" } })) {
+        Err(ToolError::InvalidArgs(m)) => assert!(m.contains("installed font"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+}
+
 /// #7429: an import that took some values and had the form refuse another says which one in its own
 /// response (a CLI or MCP caller need not call `doc_info`); one the form refused whole still fails;
 /// one the form took whole carries an empty list.
