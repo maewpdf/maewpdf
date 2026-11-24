@@ -16835,7 +16835,7 @@ fn a_paragraph_of_several_colours_copies_bold_italic_and_underlined() {
             AddedText {
                 text: "หนังสือมอบอำนาจ".into(), rect: [10.0, 10.0, 300.0, 40.0], size: 20.0, bold, italic, underline, ..Default::default()
             };
-        let run = |chars: std::ops::Range<usize>, color: [f64; 3]| TextRun { chars, color, size: 20.0, bold, italic, underline };
+        let run = |chars: std::ops::Range<usize>, color: [f64; 3]| TextRun { chars, color, size: 20.0, bold, italic, underline, family: None };
         let runs = vec![run(0..3, [1.0, 0.0, 0.0]), run(3..7, [1.0, 0.5, 0.0]), run(7..15, [0.0; 3])];
         s.apply(id, Edit::AddStyledText { page: 0, text, runs }).unwrap();
         let doc = s.get(id).unwrap();
@@ -16920,7 +16920,7 @@ fn a_copy_of_a_heading_of_mixed_looks_keeps_its_underlined_parts() {
         TextRun { chars: 0..4, color: red, size: 20.0, bold: true, ..Default::default() },
         TextRun { chars: 4..7, color: black, size: 20.0, bold: true, italic: true, ..Default::default() },
         TextRun { chars: 7..10, color: black, size: 20.0, underline: true, ..Default::default() },
-        TextRun { chars: 10..15, color: orange, size: 20.0, bold: true, italic: true, underline: true },
+        TextRun { chars: 10..15, color: orange, size: 20.0, bold: true, italic: true, underline: true, family: None },
         TextRun { chars: 15..21, color: black, size: 20.0, bold: true, ..Default::default() },
     ];
     s.apply(id, Edit::AddStyledText { page: 0, text, runs }).unwrap();

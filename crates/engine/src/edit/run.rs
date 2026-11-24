@@ -1169,7 +1169,11 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                         range: range(r.chars.clone()),
                         // Each part's weight, slant and underline too (Thai edition), where they
                         // differ from the text's own.
-                        family: (r.bold != text.bold || r.italic != text.italic).then_some((text.family, r.bold, r.italic)),
+                        family: (r.bold != text.bold || r.italic != text.italic || r.family.is_some_and(|f| f != text.family)).then_some((
+                            r.family.unwrap_or(text.family),
+                            r.bold,
+                            r.italic,
+                        )),
                         resource: None,
                         size: (r.size.is_finite() && r.size > 0.0 && (r.size - text.size).abs() > 0.01).then_some(r.size),
                         color: Some(r.color),

@@ -249,12 +249,19 @@ pub(crate) fn paragraph_runs(block: &pdfcraft_engine::TextBlock, lines: &[pdfcra
                 bold: line.bold,
                 italic: line.italic,
                 underline,
+                // Each part's own font (Thai edition): a box in two or three fonts keeps them.
+                family: Some(source_look(&line.base_font, line.size, line.color, line.bold, line.italic).family),
             };
             match runs.last_mut() {
                 Some(last) if last.same_look(&run) && last.chars.end == run.chars.start => last.chars.end = run.chars.end,
                 _ => runs.push(run),
             }
             from = to;
+        }
+    }
+    if runs.windows(2).all(|w| w[0].family == w[1].family) {
+        for run in &mut runs {
+            run.family = None;
         }
     }
     let uniform = runs.windows(2).all(|w| w[0].same_look(&w[1]));

@@ -413,8 +413,10 @@ pub(crate) fn with_runs(mut edit: Edit, runs: &[pdfcraft_engine::TextRun], famil
         let base = style.size;
         // The parts' faces when they differ from each other or from the paragraph's.
         let face = |r: &pdfcraft_engine::TextRun| (r.bold, r.italic);
-        let faces_vary =
-            runs.windows(2).any(|w| face(&w[0]) != face(&w[1])) || style.family.is_some_and(|(_, b, i)| runs.iter().any(|r| face(r) != (b, i)));
+        let faces_vary = runs.windows(2).any(|w| face(&w[0]) != face(&w[1]))
+            || style.family.is_some_and(|(_, b, i)| runs.iter().any(|r| face(r) != (b, i)))
+            // Thai edition: a part in a font of its own.
+            || runs.iter().any(|r| r.family.is_some());
         let underlines_vary = runs.windows(2).any(|w| w[0].underline != w[1].underline);
         for run in runs {
             let range = byte(run.chars.start)..byte(run.chars.end);
@@ -423,7 +425,7 @@ pub(crate) fn with_runs(mut edit: Edit, runs: &[pdfcraft_engine::TextRun], famil
             }
             style.ranges.push(pdfcraft_engine::RangeStyle {
                 range,
-                family: faces_vary.then_some((style.family.map_or(family, |(f, _, _)| f), run.bold, run.italic)),
+                family: faces_vary.then_some((run.family.unwrap_or_else(|| style.family.map_or(family, |(f, _, _)| f)), run.bold, run.italic)),
                 resource: None,
                 size: (Some(run.size) != base && run.size.is_finite() && run.size > 0.0).then_some(run.size),
                 color: Some(run.color),
@@ -644,6 +646,29 @@ startxref
                 (4..8, Some((pdfcraft_engine::FontFamily::Sarabun, false, false)), Some(false)),
             ]
         );
+    }
+
+    /// Thai edition: a box set in two fonts gives each part its own font, not one for all (the
+    /// owner's report: "หนัง" in one font and the rest in another came out in one font).
+    #[test]
+    fn the_painter_copies_each_parts_font() {
+        use pdfcraft_engine::FontFamily as F;
+        let runs = [
+            pdfcraft_engine::TextRun { chars: 0..4, color: [0.9, 0.1, 0.1], size: 22.0, bold: true, family: Some(F::Times), ..Default::default() },
+            pdfcraft_engine::TextRun { chars: 4..8, color: [0.0; 3], size: 22.0, bold: true, family: Some(F::Sarabun), ..Default::default() },
+        ];
+        let edit = Edit::EditTextBlock { page: 0, block: 0, text: "Software".into(), style: BlockStyle::default() };
+        let Edit::EditTextBlock { style, .. } = with_runs(edit, &runs, F::Sarabun) else { panic!("still a paragraph edit") };
+        let parts: Vec<_> = style.ranges.iter().map(|r| (r.range.clone(), r.family)).collect();
+        assert_eq!(parts, vec![(0..4, Some((F::Times, true, false))), (4..8, Some((F::Sarabun, true, false)))]);
+        // Parts in one font name none: the paragraph's own family stands.
+        let same = [
+            pdfcraft_engine::TextRun { chars: 0..4, color: [0.9, 0.1, 0.1], size: 22.0, ..Default::default() },
+            pdfcraft_engine::TextRun { chars: 4..8, color: [0.0; 3], size: 22.0, ..Default::default() },
+        ];
+        let edit = Edit::EditTextBlock { page: 0, block: 0, text: "Software".into(), style: BlockStyle::default() };
+        let Edit::EditTextBlock { style, .. } = with_runs(edit, &same, F::Sarabun) else { panic!("still a paragraph edit") };
+        assert!(style.ranges.iter().all(|r| r.family.is_none()), "{:?}", style.ranges);
     }
 
     /// Thai edition: a format of several colours painted on an added box, or a colour given to a

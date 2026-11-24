@@ -29,12 +29,17 @@ pub struct TextRun {
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
+    /// The part's own font family when the paragraph has several (Thai edition: a box set in two
+    /// or three fonts keeps each of them through the format painter and a paste). `None`: the
+    /// family of the text it is given to.
+    pub family: Option<crate::FontFamily>,
 }
 
 impl TextRun {
     /// Whether two runs look alike.
     pub fn same_look(&self, other: &TextRun) -> bool {
-        self.color == other.color
+        self.family == other.family
+            && self.color == other.color
             && self.size == other.size
             && self.bold == other.bold
             && self.italic == other.italic
