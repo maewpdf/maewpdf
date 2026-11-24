@@ -644,6 +644,34 @@ fn appearance_tab_restyles_the_field() {
     assert_eq!((l.style, l.font, l.fill), (BorderStyle::Dashed, FieldFont::Courier, Some([1.0, 1.0, 0.8])));
 }
 
+/// Thai edition: the field's font menu is the Add text one: TH Sarabun PSK is in it beside the
+/// standard fonts, and picking it sets the field in that family.
+#[test]
+fn the_field_font_menu_offers_the_document_families() {
+    use pdfcraft_engine::FieldFont;
+    if pdfcraft_engine::FontFamily::Sarabun.craft(false, false).is_none() {
+        return; // built without craft-fonts
+    }
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.state_mut().open_field_props("city", 0);
+    h.run_steps(2);
+    h.get_by_label("Appearance").click();
+    h.run_steps(2);
+    let before = h.state().field_props.as_ref().unwrap().look.unwrap().font;
+    h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some(before.label())).expect("the font menu").click();
+    h.run_steps(2);
+    h.get_by_label("TH Sarabun PSK").click();
+    h.run_steps(2);
+    let font = h.state().field_props.as_ref().unwrap().look.unwrap().font;
+    assert_eq!(font, FieldFont::Face("TH Sarabun PSK"));
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let s = h.state();
+    assert_eq!(s.session.get(s.views[0].id).unwrap().field_look("city").unwrap().font, FieldFont::Face("TH Sarabun PSK"));
+}
+
 #[test]
 fn appearance_tab_keeps_auto_font_size() {
     let mut h = harness();
