@@ -207,3 +207,30 @@ fn the_page_centre_pulls_a_guide_hardest_and_shows_green() {
     assert!((guides[0].2 - 0.5).abs() < 1e-4, "on the middle: {guides:?}");
     assert!(!green(&h), "cyan once let go");
 }
+
+/// Thai edition: in split view, each pane's rulers drag guides onto that pane's own pages, the
+/// left (main) pane's too. Both panes showing one document took the same ids, and the right
+/// pane's rulers took every drag.
+#[test]
+fn in_split_view_each_panes_rulers_drag_its_own_guides() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("view.split"));
+    crate::support::settle(&mut h);
+    assert_eq!(h.state().views.len(), 2, "the document in both panes");
+    for (pane, upright) in [(0, false), (0, true), (1, false)] {
+        let area = h.state().views[pane].viewport_rect();
+        let page = h.state().views[pane].page_screen_rect(0).expect("on screen");
+        let (ruler, to) = if upright {
+            let at = egui::pos2(area.left() + 9.0, page.center().y + 30.0);
+            (at, egui::pos2(page.left() + page.width() / 3.0, at.y))
+        } else {
+            let at = egui::pos2(page.center().x + 30.0, area.top() + 9.0);
+            (at, egui::pos2(at.x, page.top() + page.height() / 3.0))
+        };
+        let before = h.state().views[pane].ruler_guides().len();
+        drag(&mut h, ruler, to);
+        let guides = h.state().views[pane].ruler_guides();
+        assert_eq!(guides.len(), before + 1, "pane {pane}, upright {upright}: {guides:?}");
+        assert_eq!(guides.last().map(|g| g.1), Some(upright));
+    }
+}

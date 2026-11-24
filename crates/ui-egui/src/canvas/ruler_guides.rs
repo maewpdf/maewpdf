@@ -154,7 +154,7 @@ pub(crate) fn guides(ui: &egui::Ui, view: &mut DocView, frame: &GuideFrame<'_>) 
         }
         let resp = grab_area(
             &ctx,
-            egui::Id::unique(("ruler-strip", view.id.0, name)),
+            egui::Id::unique(("ruler-strip", view.view_key(), name)),
             strip,
             if upright { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical },
         );
@@ -184,7 +184,7 @@ pub(crate) fn guides(ui: &egui::Ui, view: &mut DocView, frame: &GuideFrame<'_>) 
         let strip = Rect::from_two_pos(a, b).expand(GRAB / 2.0).intersect(inside);
         if strip.is_positive() && view.guide_drag.is_none() && !frame.modal {
             let icon = if g.upright { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical };
-            if grab_area(&ctx, egui::Id::unique(("ruler-guide", view.id.0, k)), strip, icon).drag_started() {
+            if grab_area(&ctx, egui::Id::unique(("ruler-guide", view.view_key(), k)), strip, icon).drag_started() {
                 take = Some(GuideDrag { upright: g.upright, moving: Some(k), on_centre: false });
             }
         }
@@ -251,7 +251,7 @@ pub(crate) fn guides(ui: &egui::Ui, view: &mut DocView, frame: &GuideFrame<'_>) 
     }
     // The guide under way: across the whole document area, as Photoshop draws it, with where it
     // is beside the pointer.
-    let fg = ctx.layer_painter(egui::LayerId::new(Order::Foreground, egui::Id::unique(("ruler-guide-drag", view.id.0)))).with_clip_rect(inside);
+    let fg = ctx.layer_painter(egui::LayerId::new(Order::Foreground, egui::Id::unique(("ruler-guide-drag", view.view_key())))).with_clip_rect(inside);
     // Over a ruler or off the pages nothing shows: letting go there removes it.
     if let Some((_, rect, to, held)) = placed {
         let colour = match held {
