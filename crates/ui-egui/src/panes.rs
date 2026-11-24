@@ -600,6 +600,22 @@ fn pane(app: &mut PdfCraftApp, ui: &mut egui::Ui, rect: Rect, place: Place, fron
         let strip = Rect::from_min_size(rect.min, vec2(rect.width(), PANE_STRIP));
         crate::chrome::pane_tab_strip(app, &mut child, strip, place);
         Rect::from_min_max(egui::pos2(rect.left(), strip.bottom()), rect.max)
+    } else if app.panes.split.is_some_and(|s| !s.down) {
+        // Thai edition: side by side, the main pane gets a band as tall as the second pane's tab
+        // strip, naming its document, so the two panes' rulers and pages start level.
+        let band = Rect::from_min_size(rect.min, vec2(rect.width(), PANE_STRIP));
+        child.painter().rect_filled(band, 0.0, t.titlebar);
+        child.painter().hline(band.x_range(), band.bottom() - 0.5, egui::Stroke::new(1.0, t.divider));
+        if let Some(name) = front.filter(|&i| i < app.views.len()).and_then(|i| crate::canvas::tab_label(app, i)) {
+            child.painter().text(
+                band.left_center() + vec2(12.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                name,
+                egui::FontId::proportional(12.5),
+                t.text_muted,
+            );
+        }
+        Rect::from_min_max(egui::pos2(rect.left(), band.bottom()), rect.max)
     } else {
         rect
     };

@@ -350,7 +350,11 @@ fn the_active_panes_line_is_drawn_under_an_open_menu() {
     }
     let line = rects
         .iter()
-        .position(|r| (r.rect.height() - 2.0).abs() < 0.01 && (r.rect.top() - top.top()).abs() < 1.0 && (r.rect.left() - top.left()).abs() < 1.0)
+        // Thai edition: side by side, the main pane's top edge is above its name band (as tall as
+        // the second pane's tab strip, 30 points), not at its page area.
+        .position(|r| {
+            (r.rect.height() - 2.0).abs() < 0.01 && (r.rect.top() - (top.top() - 30.0)).abs() < 1.0 && (r.rect.left() - top.left()).abs() < 1.0
+        })
         .expect("the active pane's line is painted");
     let line_rect = rects[line].rect;
     let menu = rects
@@ -359,4 +363,16 @@ fn the_active_panes_line_is_drawn_under_an_open_menu() {
         .expect("the tab's menu is painted");
     assert!(rects[menu].rect.intersects(line_rect), "the menu crosses the line: {:?} {line_rect:?}", rects[menu].rect);
     assert!(line < menu, "the line was painted over the open menu");
+}
+
+/// Thai edition: side by side, the two panes' pages start level: the main pane has a band as
+/// tall as the second pane's tab strip.
+#[test]
+fn side_by_side_panes_start_level() {
+    let mut h = harness(&["a.pdf"]);
+    assert!(h.state_mut().execute("view.split"));
+    crate::support::settle(&mut h);
+    let tops: Vec<f32> = h.state().views.iter().map(|v| v.viewport_rect().top()).collect();
+    assert_eq!(tops.len(), 2);
+    assert!((tops[0] - tops[1]).abs() < 0.5, "both panes' page areas start at one height: {tops:?}");
 }
