@@ -2146,8 +2146,14 @@ pub(crate) fn paint_look_preview(
         TextAlign::Center => new.center().x - galley.size().x / 2.0,
         TextAlign::Right => new.right() - galley.size().x,
     };
-    let text = Rect::from_min_size(Pos2::new(x, new.top()), galley.size());
-    painter.rect_filled(old.union(new).union(text).expand(2.0), CornerRadius::ZERO, Color32::WHITE);
+    // Thai edition: a row of parts in several sizes is taller than the box fitted to its ink: set
+    // in the box's middle, not hanging from its top. The cover reaches over the marks and vowels
+    // that stand above or below the box, so none of the old text shows around the preview.
+    let several = !runs.is_empty() && !t.text.contains('\n');
+    let top = if several { new.center().y - galley.size().y / 2.0 } else { new.top() };
+    let text = Rect::from_min_size(Pos2::new(x, top), galley.size());
+    let reach = if several { egui::vec2(2.0, old.height() * 0.4 + 2.0) } else { egui::vec2(2.0, 2.0) };
+    painter.rect_filled(old.expand2(reach).union(new).union(text).expand(2.0), CornerRadius::ZERO, Color32::WHITE);
     painter.galley(text.min, galley, color);
     Some(new.union(text))
 }
