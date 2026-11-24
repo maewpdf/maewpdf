@@ -253,6 +253,9 @@ pub(crate) fn restyle_edit(
                     let own = b.rect[2] - b.rect[0];
                     let grow = style.size.map_or(1.0, |s| s / b.size.max(0.1)).max(1.0);
                     style.width = (own.is_finite() && own > 0.0).then_some(own * grow * 1.5 + 2.0);
+                    // That width is room to lay the row out in, not a box for it to keep (Thai
+                    // edition): kept, the box ran on past its text, over the next box on the row.
+                    style.fit_box = true;
                 }
                 (style != BlockStyle::default()).then(|| Edit::EditTextBlock { page, block: t.index, text: b.editor_text.clone(), style })
             }
@@ -646,6 +649,89 @@ startxref
                 (4..8, Some((pdfcraft_engine::FontFamily::Sarabun, false, false)), Some(false)),
             ]
         );
+    }
+
+    /// Thai edition: a larger size given to a one-row paragraph (from Format text or the format
+    /// painter) leaves it room to stay one row, but no box wider than its text: kept as its box,
+    /// that room ran on over the next box on the row (the owner's report, 2026-11-25).
+    #[test]
+    fn a_resized_row_keeps_no_box_past_its_text() {
+        let content = "BT /F1 20 Tf 72 700 Td (Left box) Tj ET BT /F1 20 Tf 250 700 Td (Right box) Tj ET";
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_string(),
+            format!(
+                "<< /Length {} >>
+stream
+{content}
+endstream",
+                content.len()
+            ),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_string(),
+        ];
+        let mut pdf = b"%PDF-1.7
+"
+        .to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(
+                format!(
+                    "{} 0 obj
+{o}
+endobj
+",
+                    i + 1
+                )
+                .as_bytes(),
+            );
+        }
+        let xref = pdf.len();
+        pdf.extend_from_slice(
+            format!(
+                "xref
+0 {}
+0000000000 65535 f 
+",
+                objects.len() + 1
+            )
+            .as_bytes(),
+        );
+        for o in offsets {
+            pdf.extend_from_slice(
+                format!(
+                    "{o:010} 00000 n 
+"
+                )
+                .as_bytes(),
+            );
+        }
+        pdf.extend_from_slice(
+            format!(
+                "trailer
+<< /Size {} /Root 1 0 R >>
+startxref
+{xref}
+%%EOF
+",
+                objects.len() + 1
+            )
+            .as_bytes(),
+        );
+        let mut s = pdfcraft_engine::Session::new();
+        let id = s.open("row.pdf", None, std::sync::Arc::new(pdf), None).unwrap();
+        let edit = {
+            let d = s.get(id).unwrap();
+            assert_eq!(d.text_blocks(0).len(), 2, "two boxes on the row");
+            let change = LookPreview { size: Some(24.0), ..Default::default() };
+            restyle_edit(d, 0, &[ObjectTarget { kind: ObjectKind::Text, index: 0 }], &change, None).expect("a change")
+        };
+        s.apply(id, edit).unwrap();
+        let blocks = s.get(id).unwrap().text_blocks(0);
+        let left = blocks.iter().find(|b| b.editor_text == "Left box").expect("still its own box");
+        assert!(left.frame.is_none_or(|f| f[2] <= left.rect[2] + 1.0), "no box past its text: {:?} for {:?}", left.frame, left.rect);
+        assert!(left.size > 23.0, "it took the size: {}", left.size);
     }
 
     /// Thai edition: a box set in two fonts gives each part its own font, not one for all (the
