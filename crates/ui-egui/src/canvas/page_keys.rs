@@ -74,6 +74,20 @@ impl PageKeys {
         })
     }
 
+    /// The text the frame's Paste brings, for the pages: none while something is over them, or when
+    /// the system clipboard holds no text (Windows sends a paste then, not ⌘V).
+    pub(crate) fn pasted_text(self, ctx: &Context) -> Option<String> {
+        if self.over {
+            return None;
+        }
+        ctx.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                Event::Paste(text) => Some(text.clone()),
+                _ => None,
+            })
+        })
+    }
+
     /// Something is over the pages: their keys wait.
     pub(crate) fn over(self) -> bool {
         self.over

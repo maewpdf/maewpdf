@@ -161,6 +161,9 @@ pub struct PrepareView {
     marquee_before: Option<Vec<(String, usize)>>,
     /// Thai edition: the fields ⌘C copied (field, widget), which ⌘V pastes as new fields.
     pub clipboard: Vec<(String, usize)>,
+    /// The text the copy put on the system clipboard (the fields' names): a paste that brings it
+    /// back pastes the fields, one that brings anything else was copied since.
+    clipboard_mark: Option<String>,
     /// How many times the copied fields have been pasted: each paste lands a step further on.
     pastes: u32,
     /// The form's names before a paste or a ⌘-drag copy: the fields after it that aren't among
@@ -857,13 +860,18 @@ fn copyable(form: &[FormField], name: &str) -> bool {
     form.iter().find(|f| f.name == name).is_some_and(|f| !matches!(f.kind, FormFieldKind::Radio | FormFieldKind::Signature))
 }
 
-/// Thai edition: copy the selected fields (Copy in the field's menu, ⌘C).
-pub(crate) fn copy_selected(view: &mut DocView, form: &[FormField]) -> bool {
+/// Thai edition: copy the selected fields (Copy in the field's menu, ⌘C). Their names go on the
+/// system clipboard too: Windows sends ⌘V as a paste of the clipboard's text, and only when it has
+/// some.
+pub(crate) fn copy_selected(ctx: &egui::Context, view: &mut DocView, form: &[FormField]) -> bool {
     let prep = &mut view.prepare;
     let picked: Vec<(String, usize)> = prep.selected.iter().chain(prep.also.iter()).filter(|(n, _)| copyable(form, n)).cloned().collect();
     if picked.is_empty() {
         return false;
     }
+    let mark = picked.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ");
+    ctx.copy_text(mark.clone());
+    prep.clipboard_mark = Some(mark);
     prep.clipboard = picked;
     prep.pastes = 0;
     true
@@ -901,8 +909,10 @@ pub(crate) fn clipboard_keys(ctx: &egui::Context, keys: PageKeys, view: &mut Doc
     if ctx.egui_wants_keyboard_input() {
         return;
     }
-    let clip = keys.clipboard(ctx);
-    let (mut copy, mut paste) = (clip.copy, clip.paste);
+    let copy_event = keys.clipboard(ctx).copy;
+    // A paste of the names the copy left on the clipboard: anything else was copied since.
+    let pasted = keys.pasted_text(ctx);
+    let (mut copy, mut paste) = (copy_event, pasted.is_some() && pasted == view.prepare.clipboard_mark);
     keys.take_presses(ctx, |key, m| match key {
         egui::Key::C if m.command && !m.shift && !m.alt => {
             copy = true;
@@ -915,7 +925,7 @@ pub(crate) fn clipboard_keys(ctx: &egui::Context, keys: PageKeys, view: &mut Doc
         _ => false,
     });
     if copy {
-        copy_selected(view, form);
+        copy_selected(ctx, view, form);
     } else if paste {
         paste_copied(view, form);
     }

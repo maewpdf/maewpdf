@@ -2309,3 +2309,25 @@ fn a_new_text_field_takes_the_look_last_given_one() {
     let check = doc.form.iter().find(|f| !before.contains(&f.name)).expect("a check box");
     assert_ne!(doc.field_look(&check.name).unwrap().fill, Some([1.0, 1.0, 0.0]));
 }
+
+/// Thai edition: on Windows ⌘V comes as a paste of the system clipboard's text: the names the copy
+/// put there paste the fields; other text, copied since, pastes none.
+#[test]
+fn a_paste_of_the_copied_names_pastes_the_fields() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.state_mut().views[0].prepare.selected = Some(("city".into(), 0));
+    h.run_steps(2);
+    h.event(egui::Event::Copy);
+    h.step();
+    let copied = h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == "city"));
+    assert!(copied, "the names go on the clipboard: {:?}", h.output().platform_output.commands);
+    h.run_steps(1);
+    h.event(egui::Event::Paste("something else".into()));
+    h.run_steps(3);
+    assert!(!names(&h).contains(&"city2".to_string()), "other text pastes no field");
+    h.event(egui::Event::Paste("city".into()));
+    h.run_steps(4);
+    assert!(names(&h).contains(&"city2".to_string()), "{:?}", names(&h));
+}

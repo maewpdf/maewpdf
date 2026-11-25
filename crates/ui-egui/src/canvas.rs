@@ -2406,7 +2406,7 @@ fn draw_pages(
             // Copy and Paste make new fields of their own (Thai edition); Duplicate puts this one
             // on other pages.
             if ui.add_enabled(can_modify, egui::Button::new(tl!("Copy"))).clicked() {
-                crate::prepare::copy_selected(view, form);
+                crate::prepare::copy_selected(ui.ctx(), view, form);
                 ui.close();
             }
             if ui.add_enabled(can_modify && !view.prepare.clipboard.is_empty(), egui::Button::new(tl!("Paste"))).clicked() {
