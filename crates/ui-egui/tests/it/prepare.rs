@@ -824,12 +824,12 @@ fn button_label_is_editable_without_renaming_the_field() {
 
 #[test]
 fn dropdown_alignment_is_editable_and_preserved() {
-    choice_alignment(pdfcraft_engine::NewField::Combo { options: vec!["One".into(), "Two".into()], editable: false }, "Center", 1);
+    choice_alignment(pdfcraft_engine::NewField::Combo { options: vec!["One".into(), "Two".into()], editable: false }, "Centre", 1);
 }
 
 #[test]
 fn list_box_alignment_is_editable_and_preserved() {
-    choice_alignment(pdfcraft_engine::NewField::List { options: vec!["One".into(), "Two".into()], multi: true }, "Left", 0);
+    choice_alignment(pdfcraft_engine::NewField::List { options: vec!["One".into(), "Two".into()], multi: true }, "Align left", 0);
 }
 
 fn choice_alignment(kind: pdfcraft_engine::NewField, label: &str, quadding: i64) {
@@ -849,10 +849,10 @@ fn choice_alignment(kind: pdfcraft_engine::NewField, label: &str, quadding: i64)
     h.get_by_label("Options").click();
     h.run_steps(2);
     h.get_by_label("Alignment:");
-    // The imported right alignment is displayed and unchanged until a choice is made.
-    h.get_by_value("Right").click();
-    h.run_steps(2);
-    h.get_by_label(label).click();
+    // The imported right alignment is what the dialog starts from, unchanged until a button is
+    // pressed (Thai edition: left, centre and right are icon buttons).
+    assert_eq!(h.state().field_props.as_ref().unwrap().quadding, 2);
+    h.query_all_by_label(label).last().expect("the alignment button").click();
     h.run_steps(2);
     h.get_by_label("Cancel").click();
     h.run_steps(2);
@@ -861,9 +861,7 @@ fn choice_alignment(kind: pdfcraft_engine::NewField, label: &str, quadding: i64)
     h.run_steps(2);
     h.get_by_label("Options").click();
     h.run_steps(2);
-    h.get_by_value("Right").click();
-    h.run_steps(2);
-    h.get_by_label(label).click();
+    h.query_all_by_label(label).last().expect("the alignment button").click();
     h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(3);
@@ -2378,4 +2376,32 @@ fn the_format_row_sets_a_fields_bold_and_alignment() {
     h.get_by_label("Auto").click();
     h.run_steps(3);
     assert_ne!(auto(&h), was, "Auto turns the size to fit on and off");
+}
+
+/// Thai edition: Field Properties has bold and italic beside the font, and alignment as icon
+/// buttons in Options; both reach the field on OK.
+#[test]
+fn field_properties_set_bold_beside_the_font_and_alignment_by_icon() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.state_mut().open_field_props("city", 0);
+    h.run_steps(2);
+    h.get_by_label("Appearance").click();
+    h.run_steps(2);
+    // The dialog's own button: the last drawn, over the panel's.
+    h.query_all_by_label("Bold").last().expect("a Bold button in the dialog").click();
+    h.run_steps(2);
+    assert!(h.state().field_props.as_ref().unwrap().look.unwrap().bold);
+    h.get_by_label("Options").click();
+    h.run_steps(2);
+    h.query_all_by_label("Align right").last().expect("an Align right button in Options").click();
+    h.run_steps(2);
+    assert_eq!(h.state().field_props.as_ref().unwrap().quadding, 2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert!(doc.field_look("city").unwrap().bold, "bold");
+    assert_eq!(doc.form.iter().find(|f| f.name == "city").unwrap().quadding, 2, "aligned right");
 }

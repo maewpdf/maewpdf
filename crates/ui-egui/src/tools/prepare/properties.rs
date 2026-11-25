@@ -15,20 +15,18 @@ fn flag_box(ui: &mut egui::Ui, flags: &mut u32, bit: u32, inverted: bool, label:
     }
 }
 
-/// Shared PDF `/Q` picker for text and choice-field Options.
+/// Shared PDF `/Q` picker for text and choice-field Options: left, centre and right as icon
+/// buttons, as Prepare a form's Format text row has them (Thai edition).
 fn alignment(ui: &mut egui::Ui, quadding: &mut i64) {
     ui.label(tl!("Alignment:"));
-    craft_ui::ComboBox::from_id_salt("quadding")
-        .selected_text(tl!(match (*quadding).clamp(0, 2) {
-            1 => "Center",
-            2 => "Right",
-            _ => "Left",
-        }))
-        .show_ui(ui, |ui| {
-            for (q, label) in [(0, tl!("Left")), (1, tl!("Center")), (2, tl!("Right"))] {
-                ui.selectable_value(quadding, q, label);
+    ui.horizontal(|ui| {
+        let current = (*quadding).clamp(0, 2);
+        for (q, icon, tip) in [(0, "align-left", tl!("Align left")), (1, "align-center", tl!("Centre")), (2, "align-right", tl!("Align right"))] {
+            if crate::icons::button(ui, icon, 28.0, current == q, tip).clicked() {
+                *quadding = q;
             }
-        });
+        }
+    });
 }
 
 /// Whether nothing holds the keyboard as a dialog's frame begins: no field being typed in and
@@ -115,8 +113,17 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                     ui.end_row();
                     if let Some(l) = d.look.as_mut() {
                         ui.label(tl!("Font:"));
-                        // The Add text font menu (Thai edition): search, TH marks, installed fonts.
-                        crate::content_ui::field_font_menu(ui, "field-font", &mut l.font, None);
+                        // The Add text font menu (Thai edition): search, TH marks, installed fonts;
+                        // then bold and italic, as Prepare a form's Format text row has them.
+                        ui.horizontal(|ui| {
+                            crate::content_ui::field_font_menu(ui, "field-font", &mut l.font, None);
+                            if crate::icons::button(ui, "bold", 28.0, l.bold, tl!("Bold")).clicked() {
+                                l.bold = !l.bold;
+                            }
+                            if crate::icons::button(ui, "italic", 28.0, l.italic, tl!("Italic")).clicked() {
+                                l.italic = !l.italic;
+                            }
+                        });
                         ui.end_row();
                         ui.label(tl!("Text Color:"));
                         if let Some(c) = crate::comments::swatch_grid(ui, Some(l.text)) {
