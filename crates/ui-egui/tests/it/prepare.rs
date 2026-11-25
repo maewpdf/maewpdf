@@ -2405,3 +2405,14 @@ fn field_properties_set_bold_beside_the_font_and_alignment_by_icon() {
     assert!(doc.field_look("city").unwrap().bold, "bold");
     assert_eq!(doc.form.iter().find(|f| f.name == "city").unwrap().quadding, 2, "aligned right");
 }
+
+/// Thai edition: Help › Support MaewPDF is a registered command that opens the site's support page.
+#[test]
+fn support_maewpdf_opens_the_support_page() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("help.support"));
+    h.step();
+    let opened =
+        h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::OpenUrl(u) if u.url == pdfcraft_engine::links::SUPPORT));
+    assert!(opened, "{:?}", h.output().platform_output.commands);
+}

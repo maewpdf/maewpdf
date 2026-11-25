@@ -43,6 +43,17 @@ pub(crate) const THAI_EDITION_AUTHOR: &str = "พัฒนาโดย Non.sitti
 
 /// The Thai edition's small mark beside its credit (home screen and About): a cat in a hoodie,
 /// made by the edition's developer (`thai/brand/`, ATTRIBUTION.toml), `height` points tall.
+/// Thai edition: a heart and a link to the site's support page (the About dialog and the home
+/// screen); the page opens in the browser, and nothing else happens.
+pub(crate) fn support_link(ui: &mut egui::Ui) -> egui::Response {
+    ui.horizontal(|ui| {
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+        crate::icons::paint(ui, rect, "heart", 14.0, egui::Color32::from_rgb(0xE8, 0x5D, 0x75));
+        ui.hyperlink_to(tl!("Like MaewPDF? Treat the cats"), pdfcraft_engine::links::SUPPORT)
+    })
+    .inner
+}
+
 /// The PNG is decoded here once per context: the image loaders are built for SVG only. A picture
 /// that can't be decoded leaves the space empty.
 pub(crate) fn thai_edition_mark(ui: &mut egui::Ui, height: f32) -> egui::Response {

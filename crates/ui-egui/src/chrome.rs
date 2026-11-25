@@ -273,6 +273,10 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     if icons::button(ui, "circle-help", button, false, tl!("Keyboard shortcuts")).clicked() {
                         app.dialog = Some(Dialog::Shortcuts);
                     }
+                    // Thai edition: the site's support page, never more than this button.
+                    if icons::button(ui, "heart", button, false, tl!("Support MaewPDF…")).clicked() {
+                        app.execute("help.support");
+                    }
                 });
             });
         });

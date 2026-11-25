@@ -13,6 +13,9 @@ pub const APP_PAGE: &str = "https://maewpdf.github.io/";
 pub const GITHUB: &str = "https://github.com/maewpdf/maewpdf";
 /// The site's problem-report box (Thai edition): a name and what went wrong, sent to the developer.
 pub const REPORT_PROBLEM: &str = "https://maewpdf.github.io/#report";
+/// The site's support page (Thai edition): a cat treat for the developer, if someone wishes. The
+/// app only opens it; nothing is asked, counted or unlocked.
+pub const SUPPORT: &str = "https://maewpdf.github.io/support";
 
 /// A link and the registry command that opens it.
 #[derive(Clone, Copy, Debug)]
@@ -30,6 +33,8 @@ pub const LINKS: &[Link] = &[
     Link { command: "help.github", label: "PdfCraft on GitHub", url: GITHUB, icon: "code-xml" },
     // Thai edition: Help › Report a problem opens the site's report box.
     Link { command: "help.report_problem", label: "Report a problem…", url: REPORT_PROBLEM, icon: "triangle-alert" },
+    // Thai edition: Help › Support MaewPDF opens the site's support page.
+    Link { command: "help.support", label: "Support MaewPDF…", url: SUPPORT, icon: "heart" },
 ];
 
 pub fn for_command(id: &str) -> Option<&'static Link> {

@@ -1901,6 +1901,7 @@ fn dialog_about(ui: &mut egui::Ui, _req: &mut Pending) -> bool {
                     ui.label(egui::RichText::new(crate::THAI_EDITION_NOTE).color(t.text_muted));
                     ui.label(egui::RichText::new(crate::THAI_EDITION_AUTHOR).color(t.text_muted));
                     ui.hyperlink(crate::THAI_EDITION_SITE);
+                    crate::support_link(ui);
                 });
             });
         }

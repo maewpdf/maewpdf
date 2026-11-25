@@ -104,6 +104,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             ui.label(egui::RichText::new(crate::THAI_EDITION_NOTE).font(theme::semibold(15.0)));
                             ui.label(egui::RichText::new(crate::THAI_EDITION_AUTHOR).color(t.text_muted));
                             ui.hyperlink(crate::THAI_EDITION_SITE);
+                            crate::support_link(ui);
                         });
                         let height = column.response.rect.height();
                         if (height - lines).abs() > 0.5 {
