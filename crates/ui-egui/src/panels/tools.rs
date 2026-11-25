@@ -234,6 +234,7 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
             ui.add(widgets::checkbox(&mut view.prepare.show_tab_numbers, tl!("Show tab numbers")));
             ui.add_space(4.0);
         }
+        crate::prepare::format_selected(app, ui, t);
         ui.horizontal(|ui| {
             let label = if app.form_preview { "Edit fields" } else { "Preview" };
             if widgets::pill_button(ui, tl!(label), app.form_preview).tip(tl!("Try the form as people filling it in will see it")).clicked() {

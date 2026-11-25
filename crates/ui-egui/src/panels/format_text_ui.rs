@@ -634,6 +634,63 @@ fn colour_button(ui: &mut egui::Ui, t: &Tokens, color: [f64; 3]) -> egui::Respon
     crate::theme::hand(resp).tip(tl!("Colour"))
 }
 
+/// Thai edition: what Prepare a form's Format text row changed, for the selected fields.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct FieldFormat {
+    pub font: Option<pdfcraft_engine::FieldFont>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub color: Option<[f64; 3]>,
+    pub size: Option<f64>,
+    pub align: Option<i64>,
+}
+
+/// Thai edition: Prepare a form's Format text for the selected text fields: the font, size and
+/// colour, bold and italic, and alignment, each for the whole field (a field has one look for all
+/// its text). `look`, `size` (0 = auto) and `align` (`/Q`) are the first selected field's.
+pub(crate) fn field_format(ui: &mut egui::Ui, t: &Tokens, look: &pdfcraft_engine::FieldLook, size: f64, align: i64) -> FieldFormat {
+    let mut out = FieldFormat::default();
+    widgets::section_title(ui, tl!("Format text"));
+    let mut font = look.font;
+    ui.scope(|ui| {
+        ui.set_width(ui.available_width());
+        if crate::content_ui::field_font_menu(ui, "prepare-format-font", &mut font, None) {
+            out.font = Some(font);
+        }
+    });
+    ui.add_space(4.0);
+    row(ui, |ui| {
+        let mut shown = size;
+        let mut hovered = None;
+        if crate::content_ui::size_control(ui, &mut shown, &mut hovered, false) && (shown - size).abs() > 1e-6 {
+            out.size = Some(shown);
+        }
+        let swatch = colour_button(ui, t, look.text);
+        egui::Popup::menu(&swatch).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+            if let Some(picked) = crate::comments::swatch_grid(ui, Some(look.text)) {
+                out.color = Some(picked);
+                ui.close();
+            }
+        });
+        let (sep, _) = ui.allocate_exact_size(vec2(9.0, 26.0), Sense::hover());
+        ui.painter().vline(sep.center().x, sep.y_range().shrink(3.0), Stroke::new(1.0, t.divider));
+        if icons::button(ui, "bold", 30.0, look.bold, tl!("Bold")).clicked() {
+            out.bold = Some(!look.bold);
+        }
+        if icons::button(ui, "italic", 30.0, look.italic, tl!("Italic")).clicked() {
+            out.italic = Some(!look.italic);
+        }
+    });
+    row(ui, |ui| {
+        for (q, icon, tip) in [(0, "align-left", tl!("Align left")), (1, "align-center", tl!("Centre")), (2, "align-right", tl!("Align right"))] {
+            if icons::button(ui, icon, 30.0, align == q, tip).clicked() && align != q {
+                out.align = Some(q);
+            }
+        }
+    });
+    out
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

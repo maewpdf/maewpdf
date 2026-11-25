@@ -34,13 +34,16 @@ pub(crate) struct EditorLook {
     /// A document family (TH Sarabun PSK or an installed font) the field is set in; `None` for a
     /// standard font, which the interface font stands in for.
     family: Option<pdfcraft_engine::FontFamily>,
+    /// The font's bold and italic, shown as the family's faces are.
+    bold: bool,
+    italic: bool,
     fill: Color32,
     text: Color32,
 }
 
 impl Default for EditorLook {
     fn default() -> Self {
-        EditorLook { family: None, fill: FIELD_FILL, text: Color32::BLACK }
+        EditorLook { family: None, bold: false, italic: false, fill: FIELD_FILL, text: Color32::BLACK }
     }
 }
 
@@ -53,12 +56,19 @@ impl EditorLook {
             }
             _ => None,
         };
-        EditorLook { family, fill: look.fill.map_or(FIELD_FILL, crate::comments::color32), text: crate::comments::color32(look.text) }
+        EditorLook {
+            family,
+            bold: look.bold,
+            italic: look.italic,
+            fill: look.fill.map_or(FIELD_FILL, crate::comments::color32),
+            text: crate::comments::color32(look.text),
+        }
     }
 
     fn font(&self, ctx: &egui::Context, size: f32) -> egui::FontId {
         match self.family {
-            Some(family) => crate::theme::document_font(ctx, family, false, false, size),
+            Some(family) => crate::theme::document_font(ctx, family, self.bold, self.italic, size),
+            None if self.bold => crate::theme::document_standard_font(ctx, true, size),
             None => egui::FontId::proportional(size),
         }
     }
@@ -1711,6 +1721,8 @@ mod tests {
             style: BorderStyle::Solid,
             text: [1.0, 0.0, 0.0],
             font: FieldFont::Helvetica,
+            bold: false,
+            italic: false,
         };
         let e = EditorLook::of(Some(&look));
         assert_eq!((e.family, e.fill, e.text), (None, Color32::from_rgb(255, 255, 0), Color32::from_rgb(255, 0, 0)));

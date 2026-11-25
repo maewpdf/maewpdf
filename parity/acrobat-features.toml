@@ -4758,8 +4758,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.field.properties"]
 tools = ["form_set_props"]
-evidence = ["crates/forms/src/tests.rs::thai_a_field_in_a_chosen_face_draws_all_its_text_from_it", "crates/forms/src/tests.rs::thai_a_field_font_is_named_by_family", "crates/automation/tests/it/automation.rs::a_form_field_takes_a_document_family_through_tools", "crates/ui-egui/tests/it/prepare.rs::the_field_font_menu_offers_the_document_families"]
-notes = "Thai edition. Field Properties ▸ Appearance ▸ Font (and editing several fields at once) is the Add text font menu: a search box, Helvetica, Times, Courier, TH Sarabun PSK, then the fonts installed on this machine, those with Thai letters marked TH. A family's field is drawn from that face, Latin and Thai alike, shaped as page text is (Thai marks where the face lays them out, the Windows Thai fonts' positioned marks used where the face has no Thai layout); what the face lacks is drawn in Helvetica or the Thai face. The form's /DR names the family once as a TrueType font that isn't embedded, with widths and metrics, so other viewers show PdfCraft's appearance and stand a font in when they redraw the field themselves (typing in it in another program uses that program's font, and its Thai marks may float there). A family this machine doesn't have reads as Helvetica and is drawn that way. No bold or italic of a family yet. Headless: form_set_props appearance.font takes helvetica, times, courier, sarabun or an installed family's name. Acrobat's behaviour not observed."
+evidence = ["crates/forms/src/tests.rs::thai_a_field_in_a_chosen_face_draws_all_its_text_from_it", "crates/forms/src/tests.rs::thai_a_field_font_is_named_by_family", "crates/automation/tests/it/automation.rs::a_form_field_takes_a_document_family_through_tools", "crates/ui-egui/tests/it/prepare.rs::the_field_font_menu_offers_the_document_families", "crates/forms/src/tests.rs::a_field_font_is_set_bold_and_italic", "crates/automation/tests/it/automation.rs::a_form_field_is_set_bold_through_tools"]
+notes = "Thai edition. Field Properties ▸ Appearance ▸ Font (and editing several fields at once) is the Add text font menu: a search box, Helvetica, Times, Courier, TH Sarabun PSK, then the fonts installed on this machine, those with Thai letters marked TH. A family's field is drawn from that face, Latin and Thai alike, shaped as page text is (Thai marks where the face lays them out, the Windows Thai fonts' positioned marks used where the face has no Thai layout); what the face lacks is drawn in Helvetica or the Thai face. The form's /DR names the family once as a TrueType font that isn't embedded, with widths and metrics, so other viewers show PdfCraft's appearance and stand a font in when they redraw the field themselves (typing in it in another program uses that program's font, and its Thai marks may float there). A family this machine doesn't have reads as Helvetica and is drawn that way. Bold and italic (Field Properties isn't needed: Prepare a form's Format text row has them): a standard font's Bold, Oblique or Italic face under Acrobat's name (HeBo, TiIt…), a family's own bold or italic face (the nearest it has) in a font of its own marked /PCBold, /PCItalic and named Family,Bold for other viewers. Thai in a standard font is drawn in the document Thai face's regular style even when the field is bold. Headless: form_set_props appearance.font takes helvetica, times, courier, sarabun or an installed family's name, and appearance.bold and italic true or false. Acrobat's behaviour not observed."
 
 [[feature]]
 id = "form.field-display"
@@ -4772,6 +4772,18 @@ commands = ["form.field.properties"]
 tools = ["form_set_props", "form_fields"]
 evidence = ["crates/forms/src/tests.rs::a_field_shows_and_prints_as_its_display_says", "crates/automation/tests/it/automation.rs::a_form_field_is_hidden_or_kept_off_paper_through_tools", "crates/ui-egui/tests/it/prepare.rs::the_form_field_menu_hides_a_field"]
 notes = "Thai edition. Field Properties ▸ General ▸ Form field: Visible, Hidden, Visible but doesn't print, Hidden but printable. It sets every widget's Hidden, Print and NoView annotation flags (ISO 32000-2 Table 167) as a script's field.display does, keeping the widgets' other flags, and opens on the state the first widget's flags give (a widget without /F has no Print flag, so it reads as shown but not printed). The page and the print path already honour the flags. Headless: form_set_props display takes visible, hidden, noprint or noview; form_fields reports visibility for a field that isn't both shown and printed. Acrobat's behaviour not observed."
+
+[[feature]]
+id = "form.format-row"
+title = "Format text for form fields in the Prepare a form panel (Thai edition)"
+area = "F"
+tier = "P2"
+milestone = "M6"
+status = "shipped"
+commands = ["form.prepare"]
+tools = ["form_set_props"]
+evidence = ["crates/ui-egui/tests/it/prepare.rs::the_format_row_sets_a_fields_bold_and_alignment"]
+notes = "Thai edition. With text, drop-down or list fields selected, Prepare a form's panel shows Format text: the font menu (search, TH marks, installed fonts), size, colour, bold, italic, and left, centre and right alignment, as Edit text's panel lays them out. Each applies to the whole of every selected field (a field has one font, size, colour and alignment for all its text), in one undo step, and becomes the look new fields take. Underline, superscript, subscript and lists are not offered: a plain field can't hold them, and rich text fields aren't shown by most viewers. Headless: form_set_props appearance (font, bold, italic, text_color), font_size and align."
 
 [[feature]]
 id = "form.af-number"

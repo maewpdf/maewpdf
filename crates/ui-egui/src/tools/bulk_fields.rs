@@ -175,6 +175,7 @@ impl Draft {
                 style: self.style.apply.then_some(self.style.value),
                 text: (self.text_appearance && self.text.apply).then_some(self.text.value),
                 font: (self.text_appearance && self.font.apply).then_some(self.font.value),
+                ..Default::default()
             };
             let props = FieldProps {
                 tooltip: self.tooltip.changed(&f.tooltip.clone().unwrap_or_default()),

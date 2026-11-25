@@ -2351,3 +2351,22 @@ fn the_hand_tool_pans_without_boxing_or_moving_fields() {
     assert_eq!(rect_of(&h, "city"), before, "the field stays");
     assert!(h.state().views[0].prepare.selected.is_none());
 }
+
+/// Thai edition: Prepare a form's Format text sets the selected field's bold and alignment from
+/// the left panel, without Field Properties.
+#[test]
+fn the_format_row_sets_a_fields_bold_and_alignment() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.state_mut().views[0].prepare.selected = Some(("city".into(), 0));
+    h.run_steps(3);
+    h.get_by_label("Bold").click();
+    h.run_steps(3);
+    h.get_by_label("Align right").click();
+    h.run_steps(3);
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert!(doc.field_look("city").unwrap().bold, "bold");
+    assert_eq!(doc.form.iter().find(|f| f.name == "city").unwrap().quadding, 2, "aligned right");
+}

@@ -854,6 +854,51 @@ pub(crate) fn takes_defaults(kind: FormFieldKind) -> bool {
     matches!(kind, FormFieldKind::Text | FormFieldKind::Combo | FormFieldKind::List)
 }
 
+/// Thai edition: Prepare a form's Format text, for the selected text, drop-down and list fields:
+/// a change applies to each of them in one undo step, and becomes the look new fields take.
+pub(crate) fn format_selected(app: &mut crate::PdfCraftApp, ui: &mut egui::Ui, t: &theme::Tokens) {
+    let Some((i, id)) = app.active_ids() else { return };
+    let Some(doc) = app.session.get(id) else { return };
+    let Some(view) = app.views.get(i) else { return };
+    let names: Vec<String> = view.prepare.names().into_iter().filter(|n| doc.form.iter().any(|f| &f.name == n && takes_defaults(f.kind))).collect();
+    let Some(first) = names.first().and_then(|n| doc.form.iter().find(|f| &f.name == n)) else { return };
+    let Some(look) = doc.field_look(&first.name) else { return };
+    let size = draft::da_size(&first.da);
+    let can = doc.allows_modification();
+    let quadding = first.quadding;
+    let changed = ui.add_enabled_ui(can, |ui| crate::format_text_ui::field_format(ui, t, &look, size, quadding)).inner;
+    ui.add_space(6.0);
+    if changed == crate::format_text_ui::FieldFormat::default() {
+        return;
+    }
+    let patch =
+        pdfcraft_engine::FieldLookPatch { font: changed.font, bold: changed.bold, italic: changed.italic, text: changed.color, ..Default::default() };
+    let edits: Vec<Edit> = names
+        .iter()
+        .map(|name| Edit::SetFieldProps {
+            name: name.clone(),
+            props: Box::new(FieldProps {
+                appearance: (patch != pdfcraft_engine::FieldLookPatch::default()).then_some(patch),
+                font_size: changed.size,
+                quadding: changed.align,
+                ..Default::default()
+            }),
+        })
+        .collect();
+    let edit = match <[Edit; 1]>::try_from(edits) {
+        Ok([one]) => one,
+        Err(edits) => Edit::Batch { label: "Change field properties".into(), edits },
+    };
+    if app.apply_edit(edit)
+        && let Some(doc) = app.session.get(id)
+        && let Some(look) = doc.field_look(&names[0])
+        && let Some(f) = doc.form.iter().find(|f| f.name == names[0])
+        && let Some(view) = app.views.get_mut(i)
+    {
+        view.prepare.defaults = Some((look, draft::da_size(&f.da)));
+    }
+}
+
 /// Thai edition: whether field `name` can be copied as a field of its own (not a radio button,
 /// which belongs to its group, nor a signature field).
 fn copyable(form: &[FormField], name: &str) -> bool {
