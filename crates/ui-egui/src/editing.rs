@@ -125,7 +125,8 @@ fn select_after_edit(
 
 /// The pages whose widgets differ between two form states, and the (field, page) pairs whose
 /// value changed and so must not be drawn from the baked page.
-fn form_edit_pages(
+pub(crate) fn form_edit_pages(
+    edit: &Edit,
     before: &[pdfcraft_engine::FormField],
     after: &[pdfcraft_engine::FormField],
 ) -> (std::collections::BTreeSet<usize>, Vec<(String, usize)>) {
@@ -150,6 +151,11 @@ fn form_edit_pages(
     }
     for old in before.iter().filter(|old| !after.iter().any(|f| f.name == old.name)) {
         changed_pages.extend(old.widgets.iter().filter_map(|w| w.page));
+    }
+    // A field's border, fill and line width are not in `FormField`, so a change to them alone
+    // compares equal: its pages are redrawn all the same (Thai edition).
+    if let Edit::SetFieldProps { name, .. } = edit {
+        changed_pages.extend(before.iter().filter(|f| f.name == *name).flat_map(|f| f.widgets.iter().filter_map(|w| w.page)));
     }
     (changed_pages, unbaked)
 }
@@ -227,7 +233,7 @@ impl PdfCraftApp {
                 // on, and the values that show over them until those pages' rasters have them.
                 let form_edit = form_before
                     .filter(|_| doc.info.pages.len() == page_count_before && doc.xfa.is_some() == had_xfa && doc.xfa.is_none() && is_form_edit(&edit))
-                    .map(|before| form_edit_pages(&before, &doc.form));
+                    .map(|before| form_edit_pages(&edit, &before, &doc.form));
                 let one_page = comment_page(&edit).or_else(|| content_page(&edit));
                 if signatures_before.is_some_and(|before| crate::canvas::signature_states_changed(&before, &doc.signatures)) {
                     signatures_changed_after_edit(view, &edit, info, &annots_before, form_edit.map(|(_, u)| u), one_page);

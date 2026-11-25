@@ -503,3 +503,26 @@ fn recolouring_print_ink_text_in_its_box_drops_the_ink_without_an_empty_step() {
     let finished = finish(&mut app);
     assert!(finished.is_none(), "an empty Undo step: {finished:?}");
 }
+
+/// Thai edition: a field's fill colour is not in `FormField`, so the form compares equal after
+/// it changes; Field Properties redraws the field's page all the same.
+#[test]
+fn a_fill_colour_change_redraws_the_fields_page() {
+    use pdfcraft_engine::{Edit, FieldProps};
+    let mut session = pdfcraft_engine::Session::new();
+    let id = session.open_new("form.pdf", std::sync::Arc::new(include_bytes!("../../tests/data/form.pdf").to_vec())).unwrap();
+    // Field Properties sends the whole look: once it has been applied, the field's /DA is what
+    // the look writes, and a fill change alone leaves the field list as it was.
+    let mut look = session.get(id).unwrap().field_look("city").unwrap();
+    let props = |look| Box::new(FieldProps { look: Some(look), ..Default::default() });
+    session.apply(id, Edit::SetFieldProps { name: "city".into(), props: props(look) }).unwrap();
+    let before = session.get(id).unwrap().form.clone();
+    look.fill = Some([1.0, 0.94, 0.0]);
+    let edit = Edit::SetFieldProps { name: "city".into(), props: props(look) };
+    session.apply(id, edit.clone()).unwrap();
+    let after = &session.get(id).unwrap().form;
+    assert_eq!(&before, after, "the fill is not in the field list");
+    let page = before.iter().find(|f| f.name == "city").unwrap().widgets[0].page.unwrap();
+    let (pages, _) = super::form_edit_pages(&edit, &before, after);
+    assert!(pages.contains(&page), "the field's page {page} is redrawn: {pages:?}");
+}
