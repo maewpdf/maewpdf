@@ -2369,4 +2369,13 @@ fn the_format_row_sets_a_fields_bold_and_alignment() {
     let doc = s.session.get(s.views[0].id).unwrap();
     assert!(doc.field_look("city").unwrap().bold, "bold");
     assert_eq!(doc.form.iter().find(|f| f.name == "city").unwrap().quadding, 2, "aligned right");
+    let auto = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        doc.form.iter().find(|f| f.name == "city").unwrap().da.contains(" 0 Tf")
+    };
+    let was = auto(&h);
+    h.get_by_label("Auto").click();
+    h.run_steps(3);
+    assert_ne!(auto(&h), was, "Auto turns the size to fit on and off");
 }

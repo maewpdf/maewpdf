@@ -662,7 +662,9 @@ pub(crate) fn field_format(ui: &mut egui::Ui, t: &Tokens, look: &pdfcraft_engine
     row(ui, |ui| {
         let mut shown = size;
         let mut hovered = None;
-        if crate::content_ui::size_control(ui, &mut shown, &mut hovered, false) && (shown - size).abs() > 1e-6 {
+        // A field sized to fit (0) says so, not "0".
+        let auto = (size == 0.0).then(|| tl!("Auto").to_owned());
+        if crate::content_ui::size_control_with(ui, &mut shown, &mut hovered, auto) && shown > 0.0 && (shown - size).abs() > 1e-6 {
             out.size = Some(shown);
         }
         let swatch = colour_button(ui, t, look.text);
@@ -686,6 +688,13 @@ pub(crate) fn field_format(ui: &mut egui::Ui, t: &Tokens, look: &pdfcraft_engine
             if icons::button(ui, icon, 30.0, align == q, tip).clicked() && align != q {
                 out.align = Some(q);
             }
+        }
+        let (sep, _) = ui.allocate_exact_size(vec2(9.0, 26.0), Sense::hover());
+        ui.painter().vline(sep.center().x, sep.y_range().shrink(3.0), Stroke::new(1.0, t.divider));
+        // Auto: the text shrinks to fit the field.
+        let mut auto = size == 0.0;
+        if ui.add(widgets::checkbox(&mut auto, tl!("Auto"))).changed() {
+            out.size = Some(if auto { 0.0 } else { 12.0 });
         }
     });
     out

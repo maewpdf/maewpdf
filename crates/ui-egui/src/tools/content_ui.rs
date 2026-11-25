@@ -1923,6 +1923,13 @@ const WHEEL_REST: f64 = 0.7;
 /// `hovered` gets the listed size under the pointer. The wheel over them steps the size a point at
 /// a time, shown as a preview (`hovered` again) and applied, as one step, once the wheel rests.
 pub(crate) fn size_control(ui: &mut egui::Ui, size: &mut f64, hovered: &mut Option<f64>, mixed: bool) -> bool {
+    size_control_with(ui, size, hovered, mixed.then(|| tl!("Mixed").to_owned()))
+}
+
+/// [`size_control`] showing `stand_in` instead of a size (Thai edition: "Mixed", or "Auto" for a
+/// form field sized to fit); a size typed or picked over it is taken even if equal.
+pub(crate) fn size_control_with(ui: &mut egui::Ui, size: &mut f64, hovered: &mut Option<f64>, stand_in: Option<String>) -> bool {
+    let mixed = stand_in.is_some();
     let before = *size;
     let shown = |v: f64| if v.fract() == 0.0 { format!("{v:.0}") } else { format!("{v}") };
     let id = ui.make_persistent_id("font-size-typed");
@@ -1935,15 +1942,14 @@ pub(crate) fn size_control(ui: &mut egui::Ui, size: &mut f64, hovered: &mut Opti
     let mut wheel: Option<(f64, f64)> = ui.data(|d| d.get_temp(wheel_id));
     let mut typed = match wheel {
         Some((value, _)) => shown(value),
-        None => kept.filter(|(_, over)| *over == *size).map_or_else(|| if mixed { tl!("Mixed").to_owned() } else { shown(*size) }, |(text, _)| text),
+        None => kept.filter(|(_, over)| *over == *size).map_or_else(|| stand_in.clone().unwrap_or_else(|| shown(*size)), |(text, _)| text),
     };
     // Narrow, with no unit beside it, so the Format text row keeps its width (the tip says what it is):
     // as wide as the largest size, three digits, in the box's own font, with its margins (the width
     // given is the whole box's) and a point for the caret.
     const MARGIN: i8 = 4;
     let font = egui::TextStyle::Body.resolve(ui.style());
-    let digits =
-        ui.fonts_mut(|f| f.layout_no_wrap(if mixed { tl!("Mixed").to_owned() } else { "500".to_owned() }, font, egui::Color32::BLACK).size().x);
+    let digits = ui.fonts_mut(|f| f.layout_no_wrap(stand_in.clone().unwrap_or_else(|| "500".to_owned()), font, egui::Color32::BLACK).size().x);
     let resp = ui
         .add(
             egui::TextEdit::singleline(&mut typed)
