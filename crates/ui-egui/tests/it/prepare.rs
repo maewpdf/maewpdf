@@ -2257,3 +2257,55 @@ fn a_command_drag_leaves_a_copy_of_a_field() {
     let copy = rect_of(&h, "city2");
     assert!(copy[1] < before[1] - 10.0 && (copy[0] - before[0]).abs() < 1.0, "{copy:?} vs {before:?}");
 }
+
+/// Thai edition: a text field drawn after Field Properties gave one a look takes that look and font
+/// size, in one undo step with the field; a check box drawn then keeps its own.
+#[test]
+fn a_new_text_field_takes_the_look_last_given_one() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.state_mut().open_field_props("city", 0);
+    h.run_steps(2);
+    {
+        let s = h.state_mut();
+        let d = s.field_props.as_mut().unwrap();
+        let mut look = d.look.unwrap();
+        look.fill = Some([1.0, 1.0, 0.0]);
+        look.text = [1.0, 0.0, 0.0];
+        d.look = Some(look);
+        d.font_size = 14.0;
+    }
+    h.run_steps(1);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let before = names(&h);
+    assert!(h.state_mut().execute("form.add.text"));
+    h.run_steps(2);
+    let (a, b) = (at(&h, 40.0, 300.0), at(&h, 200.0, 322.0));
+    drag(&mut h, a, b);
+    h.run_steps(2);
+    let new: Vec<String> = names(&h).into_iter().filter(|n| !before.contains(n)).collect();
+    assert_eq!(new.len(), 1, "{new:?}");
+    {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let look = doc.field_look(&new[0]).unwrap();
+        assert_eq!((look.fill, look.text), (Some([1.0, 1.0, 0.0]), [1.0, 0.0, 0.0]));
+        assert!(doc.form.iter().find(|f| f.name == new[0]).unwrap().da.contains(" 14 Tf"), "the font size comes too");
+    }
+    // One undo takes the field away whole.
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(2);
+    assert_eq!(names(&h), before);
+    // A check box keeps its own look.
+    assert!(h.state_mut().execute("form.add.checkbox"));
+    h.run_steps(2);
+    let (a, b) = (at(&h, 40.0, 340.0), at(&h, 60.0, 360.0));
+    drag(&mut h, a, b);
+    h.run_steps(2);
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    let check = doc.form.iter().find(|f| !before.contains(&f.name)).expect("a check box");
+    assert_ne!(doc.field_look(&check.name).unwrap().fill, Some([1.0, 1.0, 0.0]));
+}

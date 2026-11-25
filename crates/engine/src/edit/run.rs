@@ -118,6 +118,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::AddBackground { .. }
         | Edit::RemoveMarks { .. }
         | Edit::AddField { .. }
+        | Edit::AddFieldWith { .. }
         | Edit::ApplyRedactions { .. }
         | Edit::AddText { .. }
         | Edit::AddImage { .. }
@@ -923,6 +924,11 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::AddField { page, rect, kind, name } => {
             pdfcraft_forms::add_field(doc, *page, *rect, kind, name.as_deref())?;
+            invalidate_form_script_snapshot(cx);
+        }
+        Edit::AddFieldWith { page, rect, kind, props } => {
+            let name = pdfcraft_forms::add_field(doc, *page, *rect, kind, None)?;
+            pdfcraft_forms::set_props(doc, &name, props)?;
             invalidate_form_script_snapshot(cx);
         }
         Edit::SetFieldProps { name, props } => {

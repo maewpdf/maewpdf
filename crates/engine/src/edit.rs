@@ -373,6 +373,14 @@ pub enum Edit {
         kind: NewField,
         name: Option<String>,
     },
+    /// Thai edition: add a field and set its properties at once, one undo step (Prepare a form's
+    /// new text fields take the look last given one).
+    AddFieldWith {
+        page: usize,
+        rect: [f64; 4],
+        kind: NewField,
+        props: Box<FieldProps>,
+    },
     /// Field Properties ▸ General / Options.
     SetFieldProps {
         name: String,

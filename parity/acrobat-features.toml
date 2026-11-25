@@ -5302,6 +5302,18 @@ evidence = ["crates/forms/src/tests.rs::a_copied_field_has_the_look_but_not_the_
 notes = "Thai edition. Prepare a form: ⌘C (Ctrl+C) or Copy in a field's menu copies the selected fields, ⌘V or Paste makes each a new field of its own a step (12 pt) right and down, a step further each paste, and selects the copies; a field dragged with ⌘ (Ctrl) held leaves a copy where it is let go. A copy has the field's kind, look, default appearance, items, limit, format and scripts and default value, but no value; a check box's copy is off, a calculated field's copy joins the calculation order. Named with the next free number (Name → Name2, Text3 → Text4). Radio buttons (one of a group) and signature fields are not copied. Copies stay in their document; while dragging the field itself is shown moving. Headless: form_copy_field. Acrobat's behaviour not observed."
 
 [[feature]]
+id = "form.new-field-look"
+title = "New fields take the look last set (Thai edition)"
+area = "F"
+tier = "P2"
+milestone = "M6"
+status = "shipped"
+commands = ["form.prepare", "form.add.text"]
+tools = ["form_add_field", "form_set_props"]
+evidence = ["crates/ui-egui/tests/it/prepare.rs::a_new_text_field_takes_the_look_last_given_one"]
+notes = "Thai edition. Once Field Properties changes a text, drop-down or list field's appearance (border, fill, line, text colour, font) or font size, the next text, date, drop-down or list field drawn in that document view takes that look and size, in the same undo step as the field (Edit::AddFieldWith). Check boxes, radio buttons, buttons, signature fields, tables of fields and detected fields keep their own defaults; editing several fields at once doesn't set it. Headless, the same is form_add_field then form_set_props. Acrobat's Use Current Properties as New Defaults is a menu command; not observed."
+
+[[feature]]
 id = "form.duplicate-fields"
 title = "Duplicate fields across pages"
 area = "F"

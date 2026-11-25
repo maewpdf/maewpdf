@@ -2260,6 +2260,13 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
             app.field_props = Some(d);
             req.close = false;
         } else if applied && let Some(i) = app.active {
+            // The look just given a text, drop-down or list field is the next new one's (Thai edition).
+            if crate::prepare::takes_defaults(d.kind)
+                && let Some(look) = d.new_look()
+                && let Some(view) = app.views.get_mut(i)
+            {
+                view.prepare.defaults = Some(look);
+            }
             // Keep the (possibly renamed) field selected.
             // A dotted name is the full name; a plain one renames the field within its parent.
             let typed = d.name.trim();

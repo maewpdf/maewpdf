@@ -166,6 +166,9 @@ pub struct PrepareView {
     /// The form's names before a paste or a ⌘-drag copy: the fields after it that aren't among
     /// them are the copies, selected once the form is read again.
     select_new: Option<Vec<String>>,
+    /// Thai edition: the look and font size (0 = auto) last given a text, date, drop-down or list
+    /// field in Field Properties, which the next such field drawn takes.
+    pub defaults: Option<(FieldLook, f64)>,
     /// Escape ends egui's drag too; ignore its release until the mouse is up.
     ignore_release: bool,
 }
@@ -442,7 +445,7 @@ pub(crate) fn page_input(
                     };
                     let join = prep.selected.as_ref().and_then(|(n, _)| form.iter().find(|f| &f.name == n));
                     prep.select_added = Some(form.len());
-                    view.pending_edit = Some(Edit::AddField { page, rect, kind: tool.new_field(join), name: None });
+                    view.pending_edit = Some(add_field(prep.defaults, page, rect, tool.new_field(join)));
                     out.placed = true;
                 }
                 Grab::Move(_) | Grab::Corner(..) => {
@@ -523,7 +526,7 @@ pub(crate) fn page_input(
             let (w, h) = tool.default_size();
             let join = prep.selected.as_ref().and_then(|(n, _)| form.iter().find(|f| &f.name == n));
             prep.select_added = Some(form.len());
-            view.pending_edit = Some(Edit::AddField { page, rect: [at[0], at[1] - h, at[0] + w, at[1]], kind: tool.new_field(join), name: None });
+            view.pending_edit = Some(add_field(prep.defaults, page, [at[0], at[1] - h, at[0] + w, at[1]], tool.new_field(join)));
             out.placed = true;
         }
         return out;
@@ -830,6 +833,22 @@ fn cancel_marquee(prep: &mut PrepareView) {
         prep.selected = before.next();
         prep.also = before.collect();
     }
+}
+
+/// Adding `kind` on `page` at `rect`: a text, date, drop-down or list field takes `defaults`, the
+/// look last given one (Thai edition), in the same undo step.
+fn add_field(defaults: Option<(FieldLook, f64)>, page: usize, rect: [f64; 4], kind: NewField) -> Edit {
+    match defaults {
+        Some((look, size)) if matches!(kind, NewField::Text { .. } | NewField::Date | NewField::Combo { .. } | NewField::List { .. }) => {
+            Edit::AddFieldWith { page, rect, kind, props: Box::new(FieldProps { look: Some(look), font_size: Some(size), ..Default::default() }) }
+        }
+        _ => Edit::AddField { page, rect, kind, name: None },
+    }
+}
+
+/// Thai edition: whether a field of `kind` takes the look last given one when it is drawn.
+pub(crate) fn takes_defaults(kind: FormFieldKind) -> bool {
+    matches!(kind, FormFieldKind::Text | FormFieldKind::Combo | FormFieldKind::List)
 }
 
 /// Thai edition: whether field `name` can be copied as a field of its own (not a radio button,

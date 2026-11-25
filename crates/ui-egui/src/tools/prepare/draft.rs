@@ -260,6 +260,13 @@ impl FieldDraft {
         t
     }
 
+    /// Thai edition: the look and font size, when this dialog changed either of them.
+    pub(crate) fn new_look(&self) -> Option<(FieldLook, f64)> {
+        let o = self.original.as_ref().as_ref()?;
+        let look = self.look?;
+        (Some(look) != o.look || (self.font_size - o.font_size).abs() > 1e-6).then_some((look, self.font_size))
+    }
+
     /// The properties that changed (`None` when nothing did).
     pub fn props(&self) -> Option<FieldProps> {
         let o = self.original.as_ref().as_ref()?;
