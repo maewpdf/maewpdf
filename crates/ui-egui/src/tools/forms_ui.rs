@@ -25,6 +25,45 @@ const FOCUS_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 /// Background of the in-place text field editor, the same in every theme.
 const FIELD_FILL: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xF4);
 
+/// Thai edition: how the editor shows the text field being typed in: in its font, its text
+/// colour and its fill, as the page shows the field once typed, rather than in the interface's
+/// font, black on pale yellow. A field with no fill keeps the pale yellow, so where the typing
+/// goes still shows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct EditorLook {
+    /// A document family (TH Sarabun PSK or an installed font) the field is set in; `None` for a
+    /// standard font, which the interface font stands in for.
+    family: Option<pdfcraft_engine::FontFamily>,
+    fill: Color32,
+    text: Color32,
+}
+
+impl Default for EditorLook {
+    fn default() -> Self {
+        EditorLook { family: None, fill: FIELD_FILL, text: Color32::BLACK }
+    }
+}
+
+impl EditorLook {
+    pub(crate) fn of(look: Option<&pdfcraft_engine::FieldLook>) -> Self {
+        let Some(look) = look else { return EditorLook::default() };
+        let family = match look.font {
+            pdfcraft_engine::FieldFont::Face(name) => {
+                pdfcraft_engine::FontFamily::bundled().into_iter().chain(pdfcraft_engine::FontFamily::installed()).find(|f| f.label() == name)
+            }
+            _ => None,
+        };
+        EditorLook { family, fill: look.fill.map_or(FIELD_FILL, crate::comments::color32), text: crate::comments::color32(look.text) }
+    }
+
+    fn font(&self, ctx: &egui::Context, size: f32) -> egui::FontId {
+        match self.family {
+            Some(family) => crate::theme::document_font(ctx, family, false, false, size),
+            None => egui::FontId::proportional(size),
+        }
+    }
+}
+
 /// The field being edited.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Focus {
@@ -1234,6 +1273,7 @@ pub(crate) fn overlay(
     form: &[FormField],
     primary_down: bool,
     text_box: Option<&form_appearance::TextBox>,
+    look: EditorLook,
     today: (i64, u32, u32),
 ) -> Option<Edit> {
     let pressed = view.forms.pressed;
@@ -1287,7 +1327,7 @@ pub(crate) fn overlay(
                     // Sized from the text being typed, so an auto-sized field shrinks to keep it in view.
                     let font = field_screen_font(ui.painter(), f, w, &fx.text, zoom);
                     // The field is pale yellow in every theme, so the caret must not follow the theme (pale in dark mode) (#655).
-                    ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(FIELD_FILL);
+                    ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(look.fill);
                     // A field that doesn't scroll takes no more than fits (ISO 32000-2 Table 228).
                     let before = text_box.map(|_| fx.text.clone());
                     // A turned field (/MK /R, or a turned page or view) is typed into where it is:
@@ -1304,9 +1344,9 @@ pub(crate) fn overlay(
                     let mut te = if multiline { egui::TextEdit::multiline(&mut fx.text) } else { egui::TextEdit::singleline(&mut fx.text) };
                     te = te
                         .desired_width((upright.width() - 6.0 * zoom + 6.0).max(1.0))
-                        .font(egui::FontId::proportional(font))
-                        .background_color(FIELD_FILL)
-                        .text_color(Color32::BLACK)
+                        .font(look.font(ui.ctx(), font))
+                        .background_color(look.fill)
+                        .text_color(look.text)
                         .margin(egui::Margin::symmetric(3, 1))
                         .password(password)
                         .id(egui::Id::unique(("form-field", view.pane.key, &f.name, focus.widget)));
@@ -1658,6 +1698,30 @@ pub fn field_screen_rect(view: &DocView, info: &DocInfo, f: &FormField, widget: 
 mod tests {
     use super::*;
     use egui::pos2;
+
+    /// Thai edition: the editor shows a field in its own text colour and fill, and in its
+    /// document family; a field without a fill keeps the pale yellow.
+    #[test]
+    fn the_editor_takes_the_fields_look() {
+        use pdfcraft_engine::{BorderStyle, FieldFont, FieldLook, FontFamily};
+        let mut look = FieldLook {
+            border: None,
+            fill: Some([1.0, 1.0, 0.0]),
+            width: 1.0,
+            style: BorderStyle::Solid,
+            text: [1.0, 0.0, 0.0],
+            font: FieldFont::Helvetica,
+        };
+        let e = EditorLook::of(Some(&look));
+        assert_eq!((e.family, e.fill, e.text), (None, Color32::from_rgb(255, 255, 0), Color32::from_rgb(255, 0, 0)));
+        look.fill = None;
+        assert_eq!(EditorLook::of(Some(&look)).fill, FIELD_FILL);
+        assert_eq!(EditorLook::of(None), EditorLook::default());
+        if FontFamily::Sarabun.craft(false, false).is_some() {
+            look.font = FieldFont::Face("TH Sarabun PSK");
+            assert_eq!(EditorLook::of(Some(&look)).family, Some(FontFamily::Sarabun));
+        }
+    }
     use std::cell::Cell;
 
     /// A draft as the editor opens it on a field holding `value`.

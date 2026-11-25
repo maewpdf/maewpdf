@@ -3142,7 +3142,16 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
         view.pending_edit = Some(e);
     }
     let text_box = crate::forms_ui::text_box(doc, view, form);
-    if let Some(e) = crate::forms_ui::overlay(ui.ctx(), keys, view, info, form, primary_down, text_box.as_ref(), today) {
+    // The focused text field's font and colours, for its editor (Thai edition).
+    let look = crate::forms_ui::EditorLook::of(
+        view.forms
+            .focus
+            .as_ref()
+            .filter(|fx| form.iter().any(|f| f.name == fx.name && f.kind == pdfcraft_engine::FormFieldKind::Text))
+            .and_then(|fx| doc.field_look(&fx.name))
+            .as_ref(),
+    );
+    if let Some(e) = crate::forms_ui::overlay(ui.ctx(), keys, view, info, form, primary_down, text_box.as_ref(), look, today) {
         view.pending_edit = Some(e);
     }
     if let Some(e) = crate::fill_sign::type_box(ui.ctx(), keys, view, info, author) {
