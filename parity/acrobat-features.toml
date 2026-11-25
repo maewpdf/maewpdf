@@ -5290,6 +5290,18 @@ evidence = ["crates/ui-egui/tests/it/prepare.rs::aligning_distributing_and_sizin
 notes = "Shift/⌘-click to select several; right-click: Align (left, right, top, bottom, centres), Distribute, Set Fields to Same Size; the right-clicked field is the anchor"
 
 [[feature]]
+id = "form.copy-fields"
+title = "Copy and paste form fields (Thai edition)"
+area = "F"
+tier = "P1"
+milestone = "M6"
+status = "shipped"
+commands = ["form.prepare"]
+tools = ["form_copy_field"]
+evidence = ["crates/forms/src/tests.rs::a_copied_field_has_the_look_but_not_the_value", "crates/automation/tests/it/automation.rs::a_form_field_is_copied_through_tools", "crates/ui-egui/tests/it/prepare.rs::command_c_and_v_paste_a_copy_of_a_field", "crates/ui-egui/tests/it/prepare.rs::a_command_drag_leaves_a_copy_of_a_field"]
+notes = "Thai edition. Prepare a form: ⌘C (Ctrl+C) or Copy in a field's menu copies the selected fields, ⌘V or Paste makes each a new field of its own a step (12 pt) right and down, a step further each paste, and selects the copies; a field dragged with ⌘ (Ctrl) held leaves a copy where it is let go. A copy has the field's kind, look, default appearance, items, limit, format and scripts and default value, but no value; a check box's copy is off, a calculated field's copy joins the calculation order. Named with the next free number (Name → Name2, Text3 → Text4). Radio buttons (one of a group) and signature fields are not copied. Copies stay in their document; while dragging the field itself is shown moving. Headless: form_copy_field. Acrobat's behaviour not observed."
+
+[[feature]]
 id = "form.duplicate-fields"
 title = "Duplicate fields across pages"
 area = "F"

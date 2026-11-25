@@ -7377,6 +7377,31 @@ fn a_form_field_is_hidden_or_kept_off_paper_through_tools() {
     }
 }
 
+/// Thai edition: form_copy_field makes a new field of its own with the field's look and no
+/// value, beside the field or where rect says, and refuses a radio button.
+#[test]
+fn a_form_field_is_copied_through_tools() {
+    let dir = workdir("field-copy");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [10, 20, 200, 44], "name": "Name" }));
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "Name", "appearance": { "fill": "#FFFF00" } }));
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "Name": "Ada" } }));
+    let copied = ok(&mut a, "form_copy_field", json!({ "doc": doc, "field": "Name" }));
+    assert_eq!(copied["field"], json!("Name2"));
+    let placed = ok(&mut a, "form_copy_field", json!({ "doc": doc, "field": "Name", "rect": [10, 100, 200, 124] }));
+    assert_eq!(placed["field"], json!("Name3"));
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }))["fields"].clone();
+    let get = |n: &str| fields.as_array().unwrap().iter().find(|f| f["name"] == json!(n)).unwrap().clone();
+    assert_eq!(get("Name2")["value"], json!(null), "a copy has no value");
+    let (r, r2, r3) = (get("Name")["rect"].clone(), get("Name2")["rect"].clone(), get("Name3")["rect"].clone());
+    assert!((r2[0].as_f64().unwrap() - r[0].as_f64().unwrap() - 12.0).abs() < 0.01, "{r:?} {r2:?}");
+    assert!((r2[1].as_f64().unwrap() - r[1].as_f64().unwrap() - 12.0).abs() < 0.01, "{r:?} {r2:?}");
+    assert_eq!(r3, json!([10.0, 100.0, 200.0, 124.0]));
+    ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "radio", "rect": [10, 200, 24, 214], "name": "R", "export": "a" }));
+    assert!(a.call("form_copy_field", &json!({ "doc": doc, "field": "R" })).is_err());
+}
+
 /// #7429: an import that took some values and had the form refuse another says which one in its own
 /// response (a CLI or MCP caller need not call `doc_info`); one the form refused whole still fails;
 /// one the form took whole carries an empty list.

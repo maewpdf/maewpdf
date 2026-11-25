@@ -153,6 +153,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::DeleteField { .. }
         | Edit::DeleteWidget { .. }
         | Edit::DuplicateField { .. }
+        | Edit::CopyFields { .. }
         | Edit::SetTabOrder { .. }
         | Edit::MoveInTabOrder { .. }
         | Edit::SetCalculationOrder { .. }
@@ -926,6 +927,15 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::SetFieldProps { name, props } => {
             pdfcraft_forms::set_props(doc, name, props)?;
+            invalidate_form_script_snapshot(cx);
+        }
+        Edit::CopyFields { copies } => {
+            if copies.is_empty() {
+                return Err(EditError::Form(pdfcraft_forms::FormError::Invalid("no fields to copy".into())));
+            }
+            for (name, widget, page, rect) in copies {
+                pdfcraft_forms::copy_field(doc, name, *widget, *page, *rect)?;
+            }
             invalidate_form_script_snapshot(cx);
         }
         Edit::DuplicateField { name, pages } => {

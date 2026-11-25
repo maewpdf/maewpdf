@@ -691,6 +691,17 @@ pub fn tools() -> Vec<ToolDef> {
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" }, "what": { "type": "string", "enum": ["all", "comments", "fields"] } }), &["doc", "path"])),
         t("doc_import_data", "Import comments or form data", "Import comments and/or field values from an XFDF, FDF, XML, CSV or tab-delimited text file (detected from its content), or the comments of another PDF, each onto the page with the same number (comments on pages past this document's last page are left out). Comments with the same name are replaced; values go through the form's formats and validation. For an XFA form, an XDP, datasets or data XML file replaces the form's data: a laid-out form is laid out again from it (rows included) and its calculations run. Undoable. The result lists in `import_repairs` what this import left out (values the form refused, comments taken without their appearance); the import fails instead only when the form refuses every value and no comment is taken.")
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" } }), &["doc", "path"])),
+        t("form_copy_field", "Copy a field", "Copy a form field as a new field of its own (Prepare a form's copy and paste): the same kind, look, items, format and scripts, no value, named with the next free number (Name → Name2, Text3 → Text4). rect [x0, y0, x1, y1] (points from the top-left of the displayed page) places the copy, on page (1-based, default the field's own page); without rect it lands 12 points right of and below the field. widget (1-based, default 1) picks which of the field's widgets to copy. Radio buttons and signature fields are refused. Returns the copy's name. Undoable.")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "field": { "type": "string" },
+                    "widget": { "type": "integer", "minimum": 1 },
+                    "page": { "type": "integer", "minimum": 1 },
+                    "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 }
+                }),
+                &["doc", "field"],
+            )),
         t("form_delete_field", "Delete a field", "Delete a form field and all its widgets, or with widget only that one: one radio button of a group (widget n is the nth of the radio group's options in form_fields), or one copy of a duplicated field. A field's last widget takes the field with it. Undoable.")
             .destructive()
             .with(schema(json!({ "doc": doc(), "field": { "type": "string" }, "widget": { "type": "integer", "minimum": 1, "description": "Delete only this widget (1-based)." } }), &["doc", "field"])),

@@ -159,6 +159,13 @@ pub struct PrepareView {
     pub select_added: Option<usize>,
     grab: Option<(usize, Grab, Pos2)>,
     marquee_before: Option<Vec<(String, usize)>>,
+    /// Thai edition: the fields ⌘C copied (field, widget), which ⌘V pastes as new fields.
+    pub clipboard: Vec<(String, usize)>,
+    /// How many times the copied fields have been pasted: each paste lands a step further on.
+    pastes: u32,
+    /// The form's names before a paste or a ⌘-drag copy: the fields after it that aren't among
+    /// them are the copies, selected once the form is read again.
+    select_new: Option<Vec<String>>,
     /// Escape ends egui's drag too; ignore its release until the mouse is up.
     ignore_release: bool,
 }
@@ -446,8 +453,16 @@ pub(crate) fn page_input(
                         let shift = ui.input(|i| i.modifiers.shift);
                         let r = dragged(screen_rect(xf, info, page, w.rect), grab, delta, shift);
                         let rect = user_rect(xf, info, page, r);
-                        view.pending_edit =
-                            Some(Edit::SetFieldProps { name, props: Box::new(FieldProps { rect: Some((wi, rect)), ..Default::default() }) });
+                        // ⌘/Ctrl held as the field is let go: a copy lands there, the field stays
+                        // (Thai edition).
+                        let copy = matches!(grab, Grab::Move(_)) && ui.input(|i| i.modifiers.command);
+                        if copy && copyable(form, &name) {
+                            prep.select_new = Some(form.iter().map(|f| f.name.clone()).collect());
+                            view.pending_edit = Some(Edit::CopyFields { copies: vec![(name, wi, page, rect)] });
+                        } else {
+                            view.pending_edit =
+                                Some(Edit::SetFieldProps { name, props: Box::new(FieldProps { rect: Some((wi, rect)), ..Default::default() }) });
+                        }
                     }
                 }
             }
@@ -817,6 +832,76 @@ fn cancel_marquee(prep: &mut PrepareView) {
     }
 }
 
+/// Thai edition: whether field `name` can be copied as a field of its own (not a radio button,
+/// which belongs to its group, nor a signature field).
+fn copyable(form: &[FormField], name: &str) -> bool {
+    form.iter().find(|f| f.name == name).is_some_and(|f| !matches!(f.kind, FormFieldKind::Radio | FormFieldKind::Signature))
+}
+
+/// Thai edition: copy the selected fields (Copy in the field's menu, ⌘C).
+pub(crate) fn copy_selected(view: &mut DocView, form: &[FormField]) -> bool {
+    let prep = &mut view.prepare;
+    let picked: Vec<(String, usize)> = prep.selected.iter().chain(prep.also.iter()).filter(|(n, _)| copyable(form, n)).cloned().collect();
+    if picked.is_empty() {
+        return false;
+    }
+    prep.clipboard = picked;
+    prep.pastes = 0;
+    true
+}
+
+/// How far each paste lands from the copied fields, in points, right and down.
+const PASTE_STEP: f64 = 12.0;
+
+/// Thai edition: paste the copied fields as new fields (Paste in the menu, ⌘V), each a step
+/// further right and down than the last paste, on its own page; the copies are selected.
+pub(crate) fn paste_copied(view: &mut DocView, form: &[FormField]) -> bool {
+    let prep = &mut view.prepare;
+    let step = PASTE_STEP * f64::from(prep.pastes.saturating_add(1));
+    let copies: Vec<(String, usize, usize, [f64; 4])> = prep
+        .clipboard
+        .iter()
+        .filter_map(|(name, wi)| {
+            let w = form.iter().find(|f| &f.name == name)?.widgets.get(*wi)?;
+            let r = w.rect;
+            Some((name.clone(), *wi, w.page?, [r[0] + step, r[1] - step, r[2] + step, r[3] - step]))
+        })
+        .collect();
+    if copies.is_empty() {
+        return false;
+    }
+    prep.pastes = prep.pastes.saturating_add(1);
+    prep.select_new = Some(form.iter().map(|f| f.name.clone()).collect());
+    view.pending_edit = Some(Edit::CopyFields { copies });
+    true
+}
+
+/// Thai edition: ⌘C copies the selected fields and ⌘V pastes them, while no text field has focus
+/// and nothing is over the pages.
+pub(crate) fn clipboard_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, form: &[FormField]) {
+    if ctx.egui_wants_keyboard_input() {
+        return;
+    }
+    let clip = keys.clipboard(ctx);
+    let (mut copy, mut paste) = (clip.copy, clip.paste);
+    keys.take_presses(ctx, |key, m| match key {
+        egui::Key::C if m.command && !m.shift && !m.alt => {
+            copy = true;
+            true
+        }
+        egui::Key::V if m.command && !m.shift && !m.alt => {
+            paste = true;
+            true
+        }
+        _ => false,
+    });
+    if copy {
+        copy_selected(view, form);
+    } else if paste {
+        paste_copied(view, form);
+    }
+}
+
 /// Delete removes the selected fields and Escape deselects them, while no text field has focus and
 /// nothing is over the pages.
 pub(crate) fn keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView) {
@@ -842,6 +927,14 @@ pub(crate) fn keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView) {
 /// After an Add field edit: select the new field (the form's last).
 pub(crate) fn after_refresh(view: &mut DocView, form: &[FormField]) {
     view.prepare.also.retain(|(name, wi)| form.iter().any(|f| &f.name == name && *wi < f.widgets.len()));
+    // Copies pasted or dragged (Thai edition): the fields that weren't there before are selected.
+    if let Some(before) = view.prepare.select_new.take() {
+        let mut new = form.iter().filter(|f| !before.contains(&f.name)).map(|f| (f.name.clone(), 0));
+        if let Some(first) = new.next() {
+            view.prepare.selected = Some(first);
+            view.prepare.also = new.collect();
+        }
+    }
     if let Some(n) = view.prepare.select_added.take() {
         if form.len() > n
             && let Some(f) = form.last()

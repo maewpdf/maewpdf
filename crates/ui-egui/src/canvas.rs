@@ -2403,6 +2403,16 @@ fn draw_pages(
                 field_menu = Some(FieldMenu::Duplicate(name.clone()));
                 ui.close();
             }
+            // Copy and Paste make new fields of their own (Thai edition); Duplicate puts this one
+            // on other pages.
+            if ui.add_enabled(can_modify, egui::Button::new(tl!("Copy"))).clicked() {
+                crate::prepare::copy_selected(view, form);
+                ui.close();
+            }
+            if ui.add_enabled(can_modify && !view.prepare.clipboard.is_empty(), egui::Button::new(tl!("Paste"))).clicked() {
+                crate::prepare::paste_copied(view, form);
+                ui.close();
+            }
             ui.separator();
             let delete = if view.prepare.also.is_empty() { "Delete" } else { "Delete selected fields" };
             if ui.add_enabled(can_modify, egui::Button::new(tl!(delete))).clicked() {
@@ -3847,6 +3857,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     comments::keys(ui.ctx(), keys, view, info, &mut tool, allowed);
     if preparing {
         crate::prepare::keys(ui.ctx(), keys, view);
+        if allowed {
+            crate::prepare::clipboard_keys(ui.ctx(), keys, view, &form);
+        }
     }
     selection_keys(ui.ctx(), keys, view, &added, editing_content.then_some(selected_layer), tool);
     // The arrow keys move an Edit text selection in object_ui::nudge_keys.

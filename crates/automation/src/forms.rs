@@ -871,6 +871,47 @@ impl Automation {
         Ok(json!(names))
     }
 
+    /// Thai edition: Prepare a form's copy and paste of a field.
+    pub(crate) fn form_copy_field(&mut self, a: &Args) -> Result<Value> {
+        let name = a.str("field")?.to_owned();
+        let doc = self.doc(a)?;
+        let f = doc.form.iter().find(|f| f.name == name).ok_or_else(|| failed(format!("there is no field named {name:?} (see form_fields)")))?;
+        let count = f.widgets.len();
+        let widget = match a.opt_int("widget")? {
+            None => 0,
+            Some(n) => usize::try_from(n)
+                .ok()
+                .and_then(|w| w.checked_sub(1))
+                .filter(|w| *w < count)
+                .ok_or_else(|| bad(format!("widget must be 1 to {count}: {name} has {count} widgets")))?,
+        };
+        let w = f.widgets.get(widget).ok_or_else(|| failed(format!("{name} has no widgets")))?;
+        let own = w.page.ok_or_else(|| failed(format!("{name} is not on a page")))?;
+        let page = match a.opt_int("page")? {
+            None => own,
+            Some(p) => usize::try_from(p)
+                .ok()
+                .and_then(|p| p.checked_sub(1))
+                .filter(|p| *p < doc.info.pages.len())
+                .ok_or_else(|| bad(format!("page must be 1 to {}", doc.info.pages.len())))?,
+        };
+        let rect = match a.get("rect") {
+            None => [w.rect[0] + 12.0, w.rect[1] - 12.0, w.rect[2] + 12.0, w.rect[3] - 12.0],
+            Some(v) => {
+                let r: Vec<f64> = v.as_array().map(|x| x.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
+                let r = <[f64; 4]>::try_from(r).map_err(|_| bad("rect must be 4 numbers"))?;
+                let p = doc.info.pages.get(page).ok_or_else(|| failed(format!("page {} could not be read", page + 1)))?;
+                let (u0, u1) = (p.view_to_user(r[0] as f32, r[1] as f32), p.view_to_user(r[2] as f32, r[3] as f32));
+                [u0[0].min(u1[0]) as f64, u0[1].min(u1[1]) as f64, u0[0].max(u1[0]) as f64, u0[1].max(u1[1]) as f64]
+            }
+        };
+        let before: Vec<String> = doc.form.iter().map(|f| f.name.clone()).collect();
+        let mut out = self.apply(a, Edit::CopyFields { copies: vec![(name, widget, page, rect)] })?;
+        let copy = self.doc(a)?.form.iter().map(|f| f.name.clone()).find(|n| !before.contains(n));
+        out["field"] = json!(copy);
+        Ok(out)
+    }
+
     pub(crate) fn form_delete_field(&mut self, a: &Args) -> Result<Value> {
         let name = a.str("field")?.to_owned();
         if !self.doc(a)?.form.iter().any(|f| f.name == name) {

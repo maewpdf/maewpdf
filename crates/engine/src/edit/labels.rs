@@ -280,6 +280,8 @@ impl Edit {
             Edit::SetFieldProps { .. } => Label::of("Change field properties"),
             Edit::DeleteField { .. } | Edit::DeleteWidget { .. } => Label::of("Delete field"),
             Edit::DuplicateField { .. } => Label::of("Duplicate field"),
+            Edit::CopyFields { copies } if copies.len() == 1 => Label::of("Paste field"),
+            Edit::CopyFields { .. } => Label::of("Paste fields"),
             Edit::SetTabOrder { .. } | Edit::MoveInTabOrder { .. } => Label::of("Set tab order"),
             Edit::SetCalculationOrder { .. } => Label::of("Set calculation order"),
             Edit::SetInitialView(_) => Label::of("Change initial view"),

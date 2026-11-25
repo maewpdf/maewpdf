@@ -2524,6 +2524,38 @@ fn a_field_shows_and_prints_as_its_display_says() {
     }
 }
 
+/// Thai edition: a copied field is a field of its own, with the original's kind, look, format and
+/// default but none of its value, named with the next number; a check box's copy is off; radio
+/// buttons and signature fields are refused.
+#[test]
+fn a_copied_field_has_the_look_but_not_the_value() {
+    let mut doc = one_page();
+    add_field(&mut doc, 0, [50.0, 700.0, 300.0, 724.0], &NewField::Text { multiline: false }, Some("เชื้อชาติ")).unwrap();
+    let look =
+        Look { border: None, fill: Some([1.0, 1.0, 0.0]), width: 2.0, style: BorderStyle::Dashed, text: [1.0, 0.0, 0.0], font: FieldFont::Times };
+    let format = crate::af::Format::Number { decimals: 2, sep: 0, neg: 0, currency: String::new(), prepend: true };
+    set_props(&mut doc, "เชื้อชาติ", &FieldProps { look: Some(look), format: Some(format.clone()), ..FieldProps::default() }).unwrap();
+    crate::set_value(&mut doc, "เชื้อชาติ", &FieldValue::Text("12".into())).unwrap();
+    let name = copy_field(&mut doc, "เชื้อชาติ", 0, 0, [50.0, 650.0, 300.0, 674.0]).unwrap();
+    assert_eq!(name, "เชื้อชาติ2");
+    let all = fields(&doc);
+    let (a, b) = (all.iter().find(|f| f.name == "เชื้อชาติ").unwrap(), all.iter().find(|f| f.name == name).unwrap());
+    assert_eq!(crate::look(&doc, b), look);
+    assert_eq!((b.kind, &b.da, &b.actions.format), (a.kind, &a.da, &format));
+    assert_eq!(b.widgets[0].rect, [50.0, 650.0, 300.0, 674.0]);
+    assert!(b.value.is_empty() && a.value == ["12"], "{:?} / {:?}", b.value, a.value);
+    // A numbered name counts on.
+    add_field(&mut doc, 0, [50.0, 600.0, 70.0, 620.0], &NewField::CheckBox, Some("Check3")).unwrap();
+    crate::set_value(&mut doc, "Check3", &FieldValue::Check(true)).unwrap();
+    let check = copy_field(&mut doc, "Check3", 0, 0, [80.0, 600.0, 100.0, 620.0]).unwrap();
+    assert_eq!(check, "Check4");
+    let c = fields(&doc).into_iter().find(|f| f.name == check).unwrap();
+    assert_eq!((c.kind, c.widgets[0].state.as_deref()), (FieldKind::CheckBox, Some("Off")));
+    add_field(&mut doc, 0, [50.0, 550.0, 70.0, 570.0], &NewField::Radio { group: Some("g".into()), export: "a".into() }, None).unwrap();
+    assert!(copy_field(&mut doc, "g", 0, 0, [80.0, 550.0, 100.0, 570.0]).is_err());
+    assert!(copy_field(&mut doc, "nope", 0, 0, [80.0, 550.0, 100.0, 570.0]).is_err());
+}
+
 #[test]
 fn tab_order_follows_the_page_setting() {
     let mut doc = one_page();

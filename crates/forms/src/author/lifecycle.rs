@@ -186,6 +186,95 @@ pub fn add_field(doc: &mut Document, page: usize, rect: [f64; 4], kind: &NewFiel
     Ok(field_name)
 }
 
+/// The field entries a copy takes, from the field or the nearest ancestor that has them: its kind,
+/// flags, default appearance, alignment, default value, items, limit, tooltip and scripts.
+const COPIED_FIELD_KEYS: [&[u8]; 11] = [b"FT", b"Ff", b"DA", b"Q", b"DS", b"DV", b"Opt", b"TI", b"MaxLen", b"TU", b"AA"];
+
+/// The widget entries a copy takes: its look (an appearance only for a button, whose states or
+/// icon it is; a text or choice field's is drawn anew) and its own default appearance.
+const COPIED_WIDGET_KEYS: [&[u8]; 10] = [b"Type", b"Subtype", b"F", b"MK", b"BS", b"Border", b"BE", b"H", b"DA", b"Q"];
+
+/// Thai edition: copy widget `widget` of field `name` as a new field of its own on `page` (0-based)
+/// at `rect` (user space): the same kind, look, items, format and scripts, and no value. Named
+/// after it with the next free number ("Name" → "Name2", "Text3" → "Text4"). A radio button
+/// (one of a group) and a signature field are not copied. Returns the new field's full name.
+pub fn copy_field(doc: &mut Document, name: &str, widget: usize, page: usize, rect: [f64; 4]) -> Result<String, FormError> {
+    let existing = fields(doc);
+    let f = existing.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    match f.kind {
+        FieldKind::Radio => return invalid("a radio button can't be copied on its own: add buttons to its group with the Radio Button tool"),
+        FieldKind::Signature => return invalid("a signature field can't be copied"),
+        _ => {}
+    }
+    let w = f.widgets.get(widget).ok_or_else(|| FormError::Invalid(format!("{name} has no widget {}", widget.saturating_add(1))))?;
+    let pages = page_refs(doc);
+    let page_ref = *pages.get(page).ok_or_else(|| FormError::Invalid(format!("page {} does not exist", page + 1)))?;
+    let rect = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
+    if !rect.iter().all(|v| v.is_finite()) || rect[2] - rect[0] < MIN_FIELD_SIDE || rect[3] - rect[1] < MIN_FIELD_SIDE {
+        return invalid("the field is too small");
+    }
+    let mut d = Dict::new();
+    // The field's entries, nearest first up its /Parent chain (a seen-set ends a cycle).
+    let mut seen = std::collections::HashSet::new();
+    let mut node = Some(f.obj);
+    while let Some(r) = node.filter(|r| seen.insert(*r) && seen.len() <= 64) {
+        let obj = doc.get(r);
+        let Some(fd) = obj.as_dict() else { break };
+        for key in COPIED_FIELD_KEYS {
+            if d.get(key).is_none()
+                && let Some(v) = fd.get(key)
+            {
+                d.set(key.to_vec(), doc.resolve(v).as_ref().clone());
+            }
+        }
+        node = fd.reference(b"Parent");
+    }
+    let wd = doc.get(w.obj).as_dict().cloned().unwrap_or_default();
+    for key in COPIED_WIDGET_KEYS {
+        if let Some(v) = wd.get(key) {
+            d.set(key.to_vec(), doc.resolve(v).as_ref().clone());
+        }
+    }
+    if matches!(f.kind, FieldKind::CheckBox | FieldKind::PushButton) {
+        if let Some(ap) = wd.get(b"AP") {
+            d.set(b"AP".to_vec(), doc.resolve(ap).as_ref().clone());
+        }
+        if f.kind == FieldKind::CheckBox {
+            d.set(b"V".to_vec(), Object::name("Off"));
+            d.set(b"AS".to_vec(), Object::name("Off"));
+        }
+    }
+    d.set(b"Rect".to_vec(), Object::Array(rect.iter().map(|v| Object::Real(*v)).collect()));
+    d.set(b"P".to_vec(), Object::Ref(page_ref));
+    let new_name = copy_name(&existing, &top_names(doc), name);
+    let parts = name_parts(&new_name)?;
+    let af = ensure_form(doc)?;
+    let calculated = d.get(b"AA").and_then(|aa| aa.as_dict()).is_some_and(|aa| aa.get(b"C").is_some());
+    let obj = doc.add(Object::Dict(d));
+    attach(doc, af, obj, &parts)?;
+    add_to_page(doc, page_ref, obj)?;
+    // A calculated field's copy calculates too: it joins the calculation order.
+    if calculated {
+        crate::calc_order::keep_listed(doc, obj, true)?;
+    }
+    redraw_field(doc, &new_name)?;
+    Ok(new_name)
+}
+
+/// The name for a copy of `name`: its trailing number counted on ("Text3" → "Text4"), or a number
+/// added ("Name" → "Name2"), the first that no field has.
+fn copy_name(existing: &[Field], held: &[String], name: &str) -> String {
+    let stem = name.trim_end_matches(|c: char| c.is_ascii_digit());
+    let (stem, first) = match name.get(stem.len()..).and_then(|n| n.parse::<u64>().ok()) {
+        Some(n) if !stem.is_empty() && !stem.ends_with('.') => (stem, n.saturating_add(1)),
+        _ => (name, 2),
+    };
+    (first..first.saturating_add(100_000))
+        .map(|n| format!("{stem}{n}"))
+        .find(|c| !held.contains(c) && !existing.iter().any(|f| clash(c, &f.name).is_some()))
+        .unwrap_or_else(|| format!("{name} copy"))
+}
+
 /// Delete a field: its widgets leave their pages and the field leaves the form.
 pub fn delete_field(doc: &mut Document, name: &str) -> Result<(), FormError> {
     let f = fields(doc).into_iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;

@@ -389,6 +389,11 @@ pub enum Edit {
         object: pdfcraft_cos::ObjRef,
         image: Arc<Vec<u8>>,
     },
+    /// Thai edition: copy fields as new fields of their own (copy and paste, or a ⌘-drag): each
+    /// (field, widget, page, rect in user space) gets a field with that widget's kind and look.
+    CopyFields {
+        copies: Vec<(String, usize, usize, [f64; 4])>,
+    },
     /// Duplicate a field onto other pages (same field, shared value).
     DuplicateField {
         name: String,

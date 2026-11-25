@@ -2214,3 +2214,46 @@ fn the_form_field_menu_hides_a_field() {
     h.run_steps(2);
     assert_eq!(h.state().field_props.as_ref().unwrap().display, FieldDisplay::Hidden);
 }
+
+/// Thai edition: ⌘C and ⌘V copy the selected field as a new field of its own, a step down and to
+/// the right, selected; pasting again lands a step further.
+#[test]
+fn command_c_and_v_paste_a_copy_of_a_field() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.state_mut().views[0].prepare.selected = Some(("city".into(), 0));
+    h.run_steps(2);
+    let before = rect_of(&h, "city");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::C);
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::V);
+    h.run_steps(4);
+    assert!(names(&h).contains(&"city2".to_string()), "{:?}", names(&h));
+    let copy = rect_of(&h, "city2");
+    assert_eq!(copy, [before[0] + 12.0, before[1] - 12.0, before[2] + 12.0, before[3] - 12.0]);
+    assert_eq!(rect_of(&h, "city"), before, "the original stays");
+    assert_eq!(h.state().views[0].prepare.selected, Some(("city2".into(), 0)), "the copy is selected");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::V);
+    h.run_steps(4);
+    assert_eq!(rect_of(&h, "city3")[0], before[0] + 24.0);
+}
+
+/// Thai edition: a field dragged with ⌘ (Ctrl) held leaves a copy where it is let go and stays
+/// where it was.
+#[test]
+fn a_command_drag_leaves_a_copy_of_a_field() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(3);
+    let before = rect_of(&h, "city");
+    let from = field_rect(&h, "city").center();
+    let to = from + egui::vec2(0.0, 60.0);
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::COMMAND));
+    drag(&mut h, from, to);
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(3);
+    assert_eq!(rect_of(&h, "city"), before, "the field stays");
+    let copy = rect_of(&h, "city2");
+    assert!(copy[1] < before[1] - 10.0 && (copy[0] - before[0]).abs() < 1.0, "{copy:?} vs {before:?}");
+}
