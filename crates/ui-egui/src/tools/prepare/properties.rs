@@ -31,9 +31,24 @@ fn alignment(ui: &mut egui::Ui, quadding: &mut i64) {
         });
 }
 
+/// Whether nothing holds the keyboard as a dialog's frame begins: no field being typed in and
+/// no menu open. Taken first, since a field that ends on Enter has let go of the focus by the end
+/// of the frame, and a menu that picks on Enter has closed.
+pub(crate) fn keys_free(ui: &egui::Ui) -> bool {
+    ui.memory(|m| m.focused().is_none()) && !egui::Popup::is_any_open(ui.ctx())
+}
+
+/// Enter as OK (Thai edition), when [`keys_free`] said so at the frame's start: Enter in a
+/// field ends what is typed there (a script tab's text takes it as a new line), and in a menu it
+/// picks the item.
+pub(crate) fn enter_confirms(ui: &egui::Ui, free: bool) -> bool {
+    free && ui.input(|i| i.key_pressed(egui::Key::Enter))
+}
+
 /// Draw Field Properties; returns (apply, cancel).
 pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) -> (bool, bool) {
     use crate::widgets;
+    let free = keys_free(ui);
     ui.set_width(600.0);
     ui.label(egui::RichText::new(tl!(d.title())).font(theme::semibold(18.0)));
     ui.add_space(6.0);
@@ -106,7 +121,9 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                         {
                             ui.label(label);
                             ui.push_id(("field-color", index), |ui| {
-                                ui.horizontal(|ui| {
+                                // Top-aligned: in a centred row Line Thickness landed on the
+                                // swatches' second row (Thai edition).
+                                ui.horizontal_top(|ui| {
                                     let mut none = slot.is_none();
                                     if ui.add(widgets::checkbox(&mut none, tl!("No color"))).changed() {
                                         *slot = if none { None } else { Some([0.0; 3]) };
@@ -315,7 +332,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
     ui.add_space(8.0);
     ui.add(widgets::checkbox(&mut d.locked, tl!("Locked")));
     ui.add_space(6.0);
-    let (mut apply, mut cancel) = (enter, false);
+    let (mut apply, mut cancel) = (enter || enter_confirms(ui, free), false);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         if widgets::pill_button(ui, tl!("OK"), true).clicked() {
             apply = true;

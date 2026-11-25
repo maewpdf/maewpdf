@@ -259,6 +259,7 @@ fn color(ui: &mut egui::Ui, value: &mut Option<[f64; 3]>) {
 
 /// Check a property to apply its value to every selected field. No unchecked value is used.
 pub(crate) fn body(ui: &mut egui::Ui, d: &mut Draft, t: &theme::Tokens) -> (bool, bool) {
+    let free = crate::prepare::keys_free(ui);
     ui.set_width(600.0);
     ui.label(egui::RichText::new(tl!("Shared Field Properties")).font(theme::semibold(18.0)));
     ui.label(crate::i18n::fmt(tl!("{n} fields selected"), &[("n", &d.names.len().to_string())]));
@@ -368,9 +369,9 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut Draft, t: &theme::Tokens) -> (bool
         ui.label(egui::RichText::new(tl!(error)).color(t.text));
     }
     ui.separator();
-    let (mut apply, mut cancel) = (false, false);
+    let (mut apply, mut cancel) = (crate::prepare::enter_confirms(ui, free), false);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        apply = widgets::pill_button(ui, tl!("OK"), true).clicked();
+        apply |= widgets::pill_button(ui, tl!("OK"), true).clicked();
         cancel = widgets::pill_button(ui, tl!("Cancel"), false).clicked();
     });
     (apply, cancel)

@@ -672,6 +672,25 @@ fn the_field_font_menu_offers_the_document_families() {
     assert_eq!(s.session.get(s.views[0].id).unwrap().field_look("city").unwrap().font, FieldFont::Face("TH Sarabun PSK"));
 }
 
+/// Thai edition: Line Thickness sits below the Fill Color swatches, not over their second row.
+#[test]
+fn the_line_thickness_menu_sits_below_the_fill_swatches() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.state_mut().open_field_props("city", 0);
+    h.run_steps(2);
+    h.get_by_label("Appearance").click();
+    h.run_steps(3);
+    let swatches_bottom = h.query_all_by_label("Black").map(|n| n.rect().bottom()).fold(f32::MIN, f32::max);
+    let thickness = h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some("Thin")).expect("the thickness menu");
+    assert!(
+        thickness.rect().top() >= swatches_bottom,
+        "Line Thickness (top {}) overlaps the swatches (bottom {swatches_bottom})",
+        thickness.rect().top()
+    );
+}
+
 #[test]
 fn appearance_tab_keeps_auto_font_size() {
     let mut h = harness();
@@ -2129,4 +2148,42 @@ fn delete_and_escape_under_a_dialog_leave_the_selected_field() {
         assert!(h.state().views[0].prepare.selected.is_some(), "{key:?}: still selected");
         assert_eq!(h.state().dialog.is_none(), key == egui::Key::Escape, "{key:?}: only Escape closes it");
     }
+}
+
+/// Thai edition: Enter is OK in Field Properties: the fill chosen is applied and the dialog closes.
+#[test]
+fn enter_applies_field_properties() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.state_mut().open_field_props("city", 0);
+    h.run_steps(2);
+    h.get_by_label("Appearance").click();
+    h.run_steps(2);
+    let mut look = h.state().field_props.as_ref().unwrap().look.unwrap();
+    look.fill = Some([1.0, 0.0, 0.0]);
+    h.state_mut().field_props.as_mut().unwrap().look = Some(look);
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "Enter closes the dialog");
+    let s = h.state();
+    assert_eq!(s.session.get(s.views[0].id).unwrap().field_look("city").unwrap().fill, Some([1.0, 0.0, 0.0]));
+}
+
+/// Thai edition: Enter in an open menu of Field Properties is the menu's, not OK.
+#[test]
+fn enter_in_an_open_menu_keeps_field_properties_open() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.state_mut().open_field_props("city", 0);
+    h.run_steps(2);
+    h.get_by_label("Appearance").click();
+    h.run_steps(2);
+    h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some("Thin")).expect("the thickness menu").click();
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_some(), "the dialog stays open");
 }
