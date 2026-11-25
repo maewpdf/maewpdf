@@ -328,9 +328,17 @@ fn mid(r: [f64; 4]) -> f64 {
     (r[1] + r[3]) / 2.0
 }
 
-/// A label's words made into a field name: letters, digits and spaces, no trailing colon.
+/// A label's words made into a field name: letters, digits and spaces, no trailing colon. Thai
+/// keeps its vowel and tone marks (Thai edition), which aren't letters.
 fn clean(label: &str) -> String {
-    let s: String = label.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' || c == '/' { c } else { ' ' }).collect();
+    let thai = |c: char| ('\u{0E01}'..='\u{0E4E}').contains(&c);
+    // A dot inside a label ("พ.ศ.", "No.") is dropped, not made a space: a field name's dots
+    // would make it a child field.
+    let s: String = label
+        .chars()
+        .filter(|c| *c != '.')
+        .map(|c| if c.is_alphanumeric() || thai(c) || c == ' ' || c == '-' || c == '/' { c } else { ' ' })
+        .collect();
     let s = s.split_whitespace().collect::<Vec<_>>().join(" ");
     s.chars().take(40).collect::<String>().trim().to_string()
 }
@@ -343,7 +351,9 @@ fn label_for(words: &[Word], rect: [f64; 4], right_of: bool) -> String {
     let mut left: Vec<&Word> = if right_of {
         words.iter().filter(|w| same_line(w) && w.rect[0] >= rect[2] - 1.0 && w.rect[0] - rect[2] < 200.0).collect()
     } else {
-        words.iter().filter(|w| same_line(w) && w.rect[2] <= rect[0] + 1.0 && rect[0] - w.rect[2] < 250.0).collect()
+        // A word that ends a little past the field's start still leads it (Thai edition): a Thai
+        // word's box takes in the marks over its last letter, which reach over a dot leader.
+        words.iter().filter(|w| same_line(w) && w.rect[0] < rect[0] && w.rect[2] <= rect[0] + 12.0 && rect[0] - w.rect[2] < 250.0).collect()
     };
     left.sort_by(|a, b| a.rect[0].total_cmp(&b.rect[0]));
     if right_of {
@@ -359,20 +369,24 @@ fn label_for(words: &[Word], rect: [f64; 4], right_of: bool) -> String {
         }
         return clean(&picked.join(" "));
     }
-    // The words that end nearest the field, back to a wide gap.
-    let mut picked: Vec<&str> = Vec::new();
+    // The words that end nearest the field, back to a wide gap. Words that touch join without a
+    // space (Thai edition: "พ.ศ." comes as letters and dots apart).
+    let mut picked = String::new();
     let mut x = rect[0];
     for w in left.iter().rev() {
         if x - w.rect[2] > 24.0 && !picked.is_empty() {
             break;
         }
-        if w.text.chars().all(|c| c == '_') {
+        if w.text.chars().all(|c| c == '_') || dot_leader(&w.text) {
             break;
         }
-        picked.insert(0, w.text.as_str());
+        if !picked.is_empty() && x - w.rect[2] > 1.0 {
+            picked.insert(0, ' ');
+        }
+        picked.insert_str(0, &w.text);
         x = w.rect[0];
     }
-    let l = clean(&picked.join(" "));
+    let l = clean(&picked);
     if !l.is_empty() {
         return l;
     }
@@ -426,6 +440,20 @@ fn combs(boxes: &[[f64; 4]]) -> Vec<([f64; 4], usize)> {
     out
 }
 
+/// Thai edition: a row of dots (or ellipses) long enough to write on, as Thai forms leave their
+/// blanks ("ชื่อ........"); three dots end a sentence, not ask for an answer.
+fn dot_leader(text: &str) -> bool {
+    let mut n = 0usize;
+    for c in text.chars() {
+        match c {
+            '.' => n += 1,
+            '\u{2026}' => n += 3,
+            _ => return false,
+        }
+    }
+    n >= 4
+}
+
 /// Propose fields for a page. `existing` are the page's widget rectangles (no candidate
 /// overlaps them); names are unique against `taken`.
 pub fn detect(words: &[Word], shapes: &Shapes, existing: &[[f64; 4]], taken: &[String]) -> Vec<Candidate> {
@@ -438,12 +466,29 @@ pub fn detect(words: &[Word], shapes: &Shapes, existing: &[[f64; 4]], taken: &[S
         out.push(Candidate { kind, rect, name: label });
     };
     // Text that isn't underscores (labels), and underscore runs (blanks).
-    let (blanks, labels): (Vec<&Word>, Vec<&Word>) = words.iter().partition(|w| w.text.len() >= 3 && w.text.chars().all(|c| c == '_'));
+    let leader = |w: &Word| dot_leader(&w.text) && w.rect[2] - w.rect[0] >= 18.0;
+    let (blanks, labels): (Vec<&Word>, Vec<&Word>) = words.iter().partition(|w| (w.text.len() >= 3 && w.text.chars().all(|c| c == '_')) || leader(w));
     let labels: Vec<Word> = labels.into_iter().cloned().collect();
-    for b in blanks {
+    for b in &blanks {
         let h = (b.rect[3] - b.rect[1]).max(10.0);
-        let rect = [b.rect[0], b.rect[1], b.rect[2], b.rect[1] + (h * 1.4).clamp(12.0, 22.0)];
-        let l = label_for(&labels, rect, false);
+        let mut rect = [b.rect[0], b.rect[1], b.rect[2], b.rect[1] + (h * 1.4).clamp(12.0, 22.0)];
+        if leader(b) {
+            // A dot leader's field is as tall as the words on its line, which it is written
+            // among (a dot's own box may be only the dot).
+            let line = labels.iter().filter(|w| (mid(w.rect) - mid(b.rect)).abs() < h.max(10.0)).map(|w| w.rect[3] - w.rect[1]).fold(0.0, f64::max);
+            let tall = if line > 0.0 { line } else { h };
+            let bottom = labels.iter().filter(|w| (mid(w.rect) - mid(b.rect)).abs() < h.max(10.0)).map(|w| w.rect[1]).fold(b.rect[1], f64::min);
+            rect = [b.rect[0], bottom, b.rect[2], bottom + tall.clamp(12.0, 40.0)];
+        }
+        // A blank's label is on its side of the blank before it on the line (Thai edition:
+        // "วันที่.....เดือน.....": the second blank is the month's, not the day's too).
+        let floor = blanks
+            .iter()
+            .filter(|o| o.rect[2] <= b.rect[0] + 1.0 && (mid(o.rect) - mid(b.rect)).abs() < 4.0)
+            .map(|o| o.rect[2])
+            .fold(f64::NEG_INFINITY, f64::max);
+        let near: Vec<Word> = labels.iter().filter(|w| w.rect[0] >= floor - 1.0 || (mid(w.rect) - mid(b.rect)).abs() >= 4.0).cloned().collect();
+        let l = label_for(&near, rect, false);
         push(Kind::Text, rect, l, &mut out);
     }
     // Comb boxes (postcodes, dates, IBANs): one text field per row of cells, found before

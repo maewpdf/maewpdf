@@ -3442,6 +3442,33 @@ fn detection_finds_blanks_rules_boxes_and_names_them() {
     assert!(again.is_empty(), "{again:?}");
 }
 
+/// Thai edition: a Thai form's dot leaders are blanks, each named from the words just before it
+/// (not past the leader before), a Thai word's marks kept and the dots of "พ.ศ." dropped; three
+/// dots ending a sentence are not a blank.
+#[test]
+fn detection_finds_thai_dot_leaders_and_names_them() {
+    use crate::detect::*;
+    let w = |t: &str, x0: f64, x1: f64| Word { text: t.into(), rect: [x0, 700.0, x1, 716.0] };
+    let words = vec![
+        w("วันที่", 50.0, 78.0),
+        // The marks over its last letter reach a little past where the dots start.
+        w(".........", 75.0, 100.0),
+        w("เดือน", 100.0, 123.0),
+        w("..............", 123.0, 160.0),
+        w("พ", 162.0, 169.0),
+        w(".", 169.0, 172.0),
+        w("ศ", 172.0, 178.0),
+        w(".", 178.0, 181.0),
+        w("...........", 184.0, 214.0),
+        Word { text: "และอื่นๆ...".into(), rect: [50.0, 650.0, 100.0, 666.0] },
+        Word { text: "...".into(), rect: [100.0, 650.0, 108.0, 666.0] },
+    ];
+    let found = detect(&words, &Shapes::default(), &[], &[]);
+    let names: Vec<&str> = found.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["วันที่", "เดือน", "พศ"], "{found:?}");
+    assert!(found.iter().all(|c| c.kind == Kind::Text && c.rect[1] == 700.0 && c.rect[3] == 716.0), "{found:?}");
+}
+
 #[test]
 fn detection_makes_a_row_of_touching_cells_one_comb_field() {
     use crate::detect::*;

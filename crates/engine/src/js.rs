@@ -1294,7 +1294,11 @@ impl Session {
 /// A page's words for form-field detection, in user space (underscore runs split from the
 /// text around them).
 fn detection_words(text: &pdfcraft_render::PageText, info: &pdfcraft_render::PageInfo) -> Vec<pdfcraft_forms::detect::Word> {
-    page_words(text, info).into_iter().map(|(text, rect)| pdfcraft_forms::detect::Word { text, rect }).collect()
+    // Dot leaders split too (Thai edition): Thai forms leave their blanks as rows of dots.
+    words_split(text, |x, y| info.view_to_user(x, y), true)
+        .into_iter()
+        .map(|(text, r)| pdfcraft_forms::detect::Word { text, rect: [f64::from(r[0]), f64::from(r[1]), f64::from(r[2]), f64::from(r[3])] })
+        .collect()
 }
 
 /// A page's words in reading order, in user space ([x0, y0, x1, y1]); runs of underscores are
@@ -1315,6 +1319,67 @@ thread_local! {
 /// A page's words in reading order, their boxes mapped from view space by `map` (and ordered
 /// again, so that [x0, y0, x1, y1] holds whatever way `map` turns them).
 pub(crate) fn words_with(text: &pdfcraft_render::PageText, map: impl Fn(f32, f32) -> [f32; 2]) -> Vec<(String, [f32; 4])> {
+    words_split(text, map, false)
+}
+
+/// Thai edition: a glyph whose text mixes a dot leader (four dots or more) with other text, cut
+/// into its runs of dots, of spaces and of other characters, each with a share of the glyph's
+/// width: a dot about half a letter, a space half, a Thai vowel or tone mark above or below its
+/// letter none. `None` for any other glyph, and for one not laid out left to right.
+fn leader_pieces(text: &str, rect: [f32; 4]) -> Option<Vec<(String, [f32; 4])>> {
+    let leader = text.contains("....");
+    let width = rect[2] - rect[0];
+    // Not laid out left to right (or NaN): no share of a width to give.
+    if !leader || text.chars().all(|c| c == '.') || width.is_nan() || width <= rect[3] - rect[1] {
+        return None;
+    }
+    let mark = |c: char| matches!(c, '\u{0E31}' | '\u{0E34}'..='\u{0E3A}' | '\u{0E47}'..='\u{0E4E}');
+    let weight = |c: char| match c {
+        '.' => 0.45,
+        c if c.is_whitespace() => 0.5,
+        c if mark(c) => 0.0,
+        _ => 1.0,
+    };
+    let class = |c: char| {
+        if c == '.' {
+            0
+        } else if c.is_whitespace() {
+            1
+        } else {
+            2
+        }
+    };
+    let mut runs: Vec<(String, f32)> = Vec::new();
+    for c in text.chars() {
+        match runs.last_mut() {
+            Some((run, w)) if run.chars().last().is_some_and(|l| class(l) == class(c)) => {
+                run.push(c);
+                *w += weight(c);
+            }
+            _ => runs.push((c.to_string(), weight(c))),
+        }
+    }
+    let total: f32 = runs.iter().map(|(_, w)| w).sum();
+    if total.is_nan() || total <= 0.0 {
+        return None;
+    }
+    let mut x = rect[0];
+    Some(
+        runs.into_iter()
+            .map(|(run, w)| {
+                let x1 = x + width * w / total;
+                let piece = (run, [x, rect[1], x1, rect[3]]);
+                x = x1;
+                piece
+            })
+            .collect(),
+    )
+}
+
+/// [`words_with`]; with `dots` (Thai edition, for form-field detection), runs of dots and
+/// ellipses are kept apart from the text around them as underscore runs are, so a dot leader
+/// such as "Name.........." is a label and a blank.
+pub(crate) fn words_split(text: &pdfcraft_render::PageText, map: impl Fn(f32, f32) -> [f32; 2], dots: bool) -> Vec<(String, [f32; 4])> {
     let mut words: Vec<(String, [f32; 4])> = Vec::new();
     let mut last_line = u32::MAX;
     // A space glyph ends the word before it.
@@ -1323,27 +1388,35 @@ pub(crate) fn words_with(text: &pdfcraft_render::PageText, map: impl Fn(f32, f32
     let mut last_under = false;
     for (i, g) in text.glyphs.iter().enumerate() {
         let line = text.line_of.get(i).copied().unwrap_or(0);
-        if g.text.trim().is_empty() {
-            gap = true;
-            continue;
-        }
-        let under = g.text.chars().all(|c| c == '_');
-        #[cfg(test)]
-        UNDERSCORE_CHARS_READ.with(|n| n.set(n.get() + g.text.len()));
-        let breaks = words.is_empty() || gap || line != last_line || text.space_before.get(i).copied().unwrap_or(false) || last_under != under;
-        gap = false;
-        last_line = line;
-        match words.last_mut() {
-            Some((w, r)) if !breaks => {
-                w.push_str(&g.text);
-                r[0] = r[0].min(g.rect[0]);
-                r[1] = r[1].min(g.rect[1]);
-                r[2] = r[2].max(g.rect[2]);
-                r[3] = r[3].max(g.rect[3]);
+        // One piece, unless a run of text that holds dot leaders comes as one glyph (Word's
+        // /ActualText spans): then its dots, spaces and words, each given a share of its width.
+        let pieces = if dots { leader_pieces(&g.text, g.rect) } else { None };
+        let pieces = pieces.unwrap_or_else(|| vec![(g.text.clone(), g.rect)]);
+        let mut space_before = text.space_before.get(i).copied().unwrap_or(false);
+        for (piece, rect) in pieces {
+            if piece.trim().is_empty() {
+                gap = true;
+                continue;
             }
-            _ => {
-                words.push((g.text.clone(), g.rect));
-                last_under = under;
+            let under = piece.chars().all(|c| c == '_') || (dots && piece.chars().all(|c| c == '.' || c == '\u{2026}'));
+            #[cfg(test)]
+            UNDERSCORE_CHARS_READ.with(|n| n.set(n.get() + piece.len()));
+            let breaks = words.is_empty() || gap || line != last_line || space_before || last_under != under;
+            gap = false;
+            space_before = false;
+            last_line = line;
+            match words.last_mut() {
+                Some((w, r)) if !breaks => {
+                    w.push_str(&piece);
+                    r[0] = r[0].min(rect[0]);
+                    r[1] = r[1].min(rect[1]);
+                    r[2] = r[2].max(rect[2]);
+                    r[3] = r[3].max(rect[3]);
+                }
+                _ => {
+                    words.push((piece, rect));
+                    last_under = under;
+                }
             }
         }
     }
@@ -1509,6 +1582,27 @@ mod review_tests {
         let mut merged = JsOutput::default();
         merged.append(out);
         assert!(merged.console.len() <= MAX_CONSOLE_LINES + 1);
+    }
+
+    /// Thai edition: a line that comes as one glyph (Word's /ActualText spans) is cut at its dot
+    /// leaders for form-field detection, so each label and blank is a word of its own; for other
+    /// uses it stays one word.
+    #[test]
+    fn a_line_in_one_glyph_is_cut_at_its_dot_leaders() {
+        let line = "แขวง/ตำบล........เขต/อำเภอ........ ";
+        let glyph = pdfcraft_render::TextGlyph { text: line.into(), rect: [0.0, 0.0, 200.0, 16.0], quad: [[0.0; 2]; 4], direction: [1.0, 0.0] };
+        let text = pdfcraft_render::PageText { line_of: vec![0], space_before: vec![false], glyphs: vec![glyph], truncated: false };
+        let words = words_split(&text, |x, y| [x, y], true);
+        let texts: Vec<&str> = words.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(texts, ["แขวง/ตำบล", "........", "เขต/อำเภอ", "........"]);
+        // In order, touching, inside the glyph; a dot narrower than a letter, a mark taking no room.
+        for pair in words.windows(2) {
+            assert!((pair[0].1[2] - pair[1].1[0]).abs() < 1e-3, "{words:?}");
+        }
+        assert!(words[0].1[0] == 0.0 && words[3].1[2] < 200.0, "{words:?}");
+        let (label, dots) = (words[0].1[2] - words[0].1[0], words[1].1[2] - words[1].1[0]);
+        assert!(dots < label, "8 dots ({dots}) are narrower than 8 letters with one mark ({label})");
+        assert_eq!(words_with(&text, |x, y| [x, y]).len(), 1, "one word for other uses");
     }
 
     /// A long run of underscores (a form's blank) is read in one pass: each glyph is compared with

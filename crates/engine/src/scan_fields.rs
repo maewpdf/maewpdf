@@ -167,7 +167,7 @@ impl Session {
             return (Vec::new(), 0);
         }
         let mut words: Vec<Word> = text
-            .map(|t| crate::js::words_with(t, |x, y| [x, y]))
+            .map(|t| crate::js::words_split(t, |x, y| [x, y], true))
             .unwrap_or_default()
             .into_iter()
             .filter_map(|(text, v)| Some(Word { text, rect: frame.view_box([[v[0], v[1]], [v[2], v[3]]])? }))
