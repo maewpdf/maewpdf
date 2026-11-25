@@ -7355,6 +7355,28 @@ fn a_form_field_takes_a_document_family_through_tools() {
     }
 }
 
+/// Thai edition: form_set_props sets whether a field is shown and printed, form_fields reports a
+/// field that isn't both, and an unknown state is refused with the four that are allowed.
+#[test]
+fn a_form_field_is_hidden_or_kept_off_paper_through_tools() {
+    let dir = workdir("field-display");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [10, 20, 200, 44], "name": "A" }));
+    let visibility = |a: &mut Automation| ok(a, "form_fields", json!({ "doc": doc }))["fields"][0]["visibility"].clone();
+    assert_eq!(visibility(&mut a), json!(null), "a new field is shown and printed");
+    for state in ["noprint", "hidden", "noview"] {
+        ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "A", "display": state }));
+        assert_eq!(visibility(&mut a), json!(state));
+    }
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "A", "display": "visible" }));
+    assert_eq!(visibility(&mut a), json!(null));
+    match a.call("form_set_props", &json!({ "doc": doc, "field": "A", "display": "faded" })) {
+        Err(ToolError::InvalidArgs(m)) => assert!(m.contains("noprint"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+}
+
 /// #7429: an import that took some values and had the form refuse another says which one in its own
 /// response (a CLI or MCP caller need not call `doc_info`); one the form refused whole still fails;
 /// one the form took whole carries an empty list.

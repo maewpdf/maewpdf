@@ -329,6 +329,10 @@ impl Automation {
                 if let Some(s) = doc.field_check_style(&f.name) {
                     o.insert("check_style".into(), json!(s.label().to_lowercase()));
                 }
+                // Thai edition: only a field that isn't both shown and printed says so.
+                if let Some(d) = doc.field_display(&f.name).filter(|d| *d != pdfcraft_engine::FieldDisplay::Visible) {
+                    o.insert("visibility".into(), json!(display_name(d)));
+                }
                 if f.actions.format != Format::None {
                     o.insert("format".into(), format_json(&f.actions.format));
                     o.insert("display".into(), json!(f.value.first().map(|v| pdfcraft_engine::form_scripts::format_value(&f.actions.format, v))));
@@ -693,6 +697,12 @@ impl Automation {
             },
             default_value: a.opt_str("default")?.map(|d| (!d.is_empty()).then(|| d.to_owned())),
             locked: a.opt_bool("locked")?,
+            display: match a.opt_str("display")? {
+                None => None,
+                Some(o) => Some(pdfcraft_engine::FieldDisplay::ALL.into_iter().find(|d| display_name(*d) == o).ok_or_else(|| {
+                    bad(format!("unknown display {o:?} (visible, hidden, noprint: shown but not printed, noview: printed but not shown)"))
+                })?),
+            },
             flags: match a.get("flags") {
                 None => Vec::new(),
                 Some(v) => {
@@ -910,5 +920,15 @@ impl Automation {
         out["comments"] = json!(doc.info.annotations.len() as i64 - before.0 as i64);
         out["filled_fields"] = json!(doc.form.iter().filter(|f| !f.value.is_empty()).count());
         Ok(out)
+    }
+}
+
+/// Thai edition: a [`pdfcraft_engine::FieldDisplay`] as `form_set_props` and `form_fields` name it.
+fn display_name(d: pdfcraft_engine::FieldDisplay) -> &'static str {
+    match d {
+        pdfcraft_engine::FieldDisplay::Visible => "visible",
+        pdfcraft_engine::FieldDisplay::Hidden => "hidden",
+        pdfcraft_engine::FieldDisplay::NoPrint => "noprint",
+        pdfcraft_engine::FieldDisplay::NoView => "noview",
     }
 }

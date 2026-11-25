@@ -81,6 +81,18 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                     let l = ui.label(tl!("Tooltip:"));
                     ui.add(crate::widgets::line(&mut d.tooltip).desired_width(340.0)).labelled_by(l.id);
                     ui.end_row();
+                    // Shown, printed, both or neither (Thai edition).
+                    let l = ui.label(tl!("Form field:"));
+                    craft_ui::ComboBox::from_id_salt("field-display")
+                        .selected_text(tl!(d.display.label()))
+                        .show_ui(ui, |ui| {
+                            for v in pdfcraft_engine::FieldDisplay::ALL {
+                                ui.selectable_value(&mut d.display, v, tl!(v.label()));
+                            }
+                        })
+                        .response
+                        .labelled_by(l.id);
+                    ui.end_row();
                 });
                 ui.add_space(12.0);
                 widgets::section_title(ui, tl!("Common Properties"));

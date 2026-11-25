@@ -78,6 +78,66 @@ impl NewField {
     }
 }
 
+/// How a field shows on screen and on paper (Field Properties ▸ General ▸ Form field), from
+/// its widgets' annotation flags Hidden (2), Print (4) and NoView (32), ISO 32000-2 Table 167.
+/// The same four states as a script's `field.display`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FieldDisplay {
+    /// Shown and printed.
+    #[default]
+    Visible,
+    /// Neither shown nor printed.
+    Hidden,
+    /// Shown, not printed.
+    NoPrint,
+    /// Printed, not shown.
+    NoView,
+}
+
+impl FieldDisplay {
+    pub const ALL: [FieldDisplay; 4] = [FieldDisplay::Visible, FieldDisplay::Hidden, FieldDisplay::NoPrint, FieldDisplay::NoView];
+
+    /// The state a widget's `/F` flags give.
+    pub fn of(flags: i64) -> FieldDisplay {
+        if flags & 2 != 0 {
+            FieldDisplay::Hidden
+        } else if flags & 32 != 0 {
+            FieldDisplay::NoView
+        } else if flags & 4 == 0 {
+            FieldDisplay::NoPrint
+        } else {
+            FieldDisplay::Visible
+        }
+    }
+
+    /// `flags` with this state's Hidden, Print and NoView bits, the other bits kept.
+    pub fn flags(self, flags: i64) -> i64 {
+        let base = flags & !(2 | 4 | 32);
+        match self {
+            FieldDisplay::Visible => base | 4,
+            FieldDisplay::Hidden => base | 2 | 4,
+            FieldDisplay::NoPrint => base,
+            FieldDisplay::NoView => base | 4 | 32,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            FieldDisplay::Visible => "Visible",
+            FieldDisplay::Hidden => "Hidden",
+            FieldDisplay::NoPrint => "Visible but doesn't print",
+            FieldDisplay::NoView => "Hidden but printable",
+        }
+    }
+}
+
+/// A field's [`FieldDisplay`], as its first widget's flags say (no flags: Hidden, Print and
+/// NoView all clear, so shown but not printed).
+pub fn field_display(doc: &Document, f: &Field) -> FieldDisplay {
+    let flags = f.widgets.first().and_then(|w| doc.get(w.obj).as_dict().and_then(|d| d.get(b"F").and_then(|v| doc.resolve(v).as_int()))).unwrap_or(0);
+    FieldDisplay::of(flags)
+}
+
 /// Field properties the Properties dialog edits (`None` leaves a value unchanged).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FieldProps {
@@ -128,6 +188,8 @@ pub struct FieldProps {
     /// turns the annotation relative to the page, and its `/Rect` stays in default user space), so
     /// a tall field turned 90 degrees holds text running up its long side.
     pub rotation: Option<(usize, i64)>,
+    /// General tab: shown and printed, hidden, or one of the two (every widget's `/F`).
+    pub display: Option<FieldDisplay>,
 }
 
 /// A [`FormError::Invalid`] with message `m`.

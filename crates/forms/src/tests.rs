@@ -2499,6 +2499,31 @@ fn thai_a_field_font_is_named_by_family() {
     assert!(e.to_string().contains("not available"), "{e}");
 }
 
+/// Thai edition: General ▸ Form field sets a field's widgets' Hidden, Print and NoView flags as a
+/// script's `field.display` does, keeps their other flags, and reads back as it was set.
+#[test]
+fn a_field_shows_and_prints_as_its_display_says() {
+    let mut doc = one_page();
+    add_field(&mut doc, 0, [50.0, 700.0, 300.0, 724.0], &NewField::Text { multiline: false }, Some("name")).unwrap();
+    let f = fields(&doc).into_iter().find(|f| f.name == "name").unwrap();
+    assert_eq!(crate::field_display(&doc, &f), crate::FieldDisplay::Visible, "a new field is shown and printed");
+    // ToggleNoView (256) is no display flag: it stays.
+    let obj = f.widgets[0].obj;
+    doc.update_dict(obj, |d| d.set(b"F".to_vec(), Object::Int(4 | 256))).unwrap();
+    for (display, flags) in [
+        (crate::FieldDisplay::Hidden, 2 | 4 | 256),
+        (crate::FieldDisplay::NoPrint, 256),
+        (crate::FieldDisplay::NoView, 4 | 32 | 256),
+        (crate::FieldDisplay::Visible, 4 | 256),
+    ] {
+        set_props(&mut doc, "name", &FieldProps { display: Some(display), ..FieldProps::default() }).unwrap();
+        let f = fields(&doc).into_iter().find(|f| f.name == "name").unwrap();
+        assert_eq!(doc.get(obj).as_dict().and_then(|d| d.int(b"F")), Some(flags), "{display:?}");
+        assert_eq!(crate::field_display(&doc, &f), display);
+        assert_eq!(f.widgets[0].hidden, matches!(display, crate::FieldDisplay::Hidden | crate::FieldDisplay::NoView), "{display:?}");
+    }
+}
+
 #[test]
 fn tab_order_follows_the_page_setting() {
     let mut doc = one_page();

@@ -2187,3 +2187,30 @@ fn enter_in_an_open_menu_keeps_field_properties_open() {
     h.run_steps(3);
     assert!(h.state().dialog.is_some(), "the dialog stays open");
 }
+
+/// Thai edition: General ▸ Form field: picking Hidden hides the field, and the dialog opens on
+/// the state the field is in.
+#[test]
+fn the_form_field_menu_hides_a_field() {
+    use pdfcraft_engine::FieldDisplay;
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.state_mut().open_field_props("city", 0);
+    h.run_steps(2);
+    // The test form's widgets have no /F: no Print flag, so they show but don't print.
+    assert_eq!(h.state().field_props.as_ref().unwrap().display, FieldDisplay::NoPrint);
+    h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some("Visible but doesn't print")).expect("the Form field menu").click();
+    h.run_steps(2);
+    h.get_by_label("Hidden").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert_eq!(doc.field_display("city"), Some(FieldDisplay::Hidden));
+    assert!(doc.form.iter().find(|f| f.name == "city").unwrap().widgets.iter().all(|w| w.hidden));
+    h.state_mut().open_field_props("city", 0);
+    h.run_steps(2);
+    assert_eq!(h.state().field_props.as_ref().unwrap().display, FieldDisplay::Hidden);
+}

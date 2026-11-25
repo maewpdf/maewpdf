@@ -3285,3 +3285,8 @@ error	the selected font has no usable TrueType/CFF outlines and metrics	ฟอ�
 	Split down	แบ่งจอลงล่าง
 	Two pages or two files side by side. Or right-click a tab › {right} / {down}. The same keys end it.	ดูสองหน้าหรือสองไฟล์ข้างกัน หรือคลิกขวาที่แท็บ › {right} / {down} กดคีย์เดิมอีกครั้งเพื่อปิด
 	Show tab numbers	แสดงหมายเลขลำดับแท็บ
+	Form field:	การแสดงช่อง:
+	Visible	แสดง
+	Hidden	ซ่อน
+	Visible but doesn't print	แสดงแต่ไม่พิมพ์
+	Hidden but printable	ซ่อนแต่พิมพ์ได้

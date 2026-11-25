@@ -729,6 +729,13 @@ impl Document {
         Some(pdfcraft_forms::look(&e.cos, f))
     }
 
+    /// How a field shows on screen and on paper (Field Properties ▸ General ▸ Form field).
+    pub fn field_display(&self, name: &str) -> Option<pdfcraft_forms::FieldDisplay> {
+        let e = self.editor.as_ref()?;
+        let f = self.form.iter().find(|f| f.name == name)?;
+        Some(pdfcraft_forms::field_display(&e.cos, f))
+    }
+
     /// A check box's or radio button's mark (Field Properties ▸ Options), `None` for other fields.
     pub fn field_check_style(&self, name: &str) -> Option<CheckStyle> {
         let e = self.editor.as_ref()?;

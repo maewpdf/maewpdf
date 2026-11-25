@@ -181,15 +181,9 @@ fn set_props_target(doc: &mut Document, name: &str, object: Option<ObjRef>, prop
         doc.update_dict(f.obj, |d| d.set(b"Opt".to_vec(), Object::Array(options.clone())))?;
         return Ok(name.to_string());
     }
-    if let Some(lock) = props.locked {
-        for w in &f.widgets {
-            let flags = doc.get(w.obj).as_dict().and_then(|d| d.get(b"F").and_then(|v| doc.resolve(v).as_int())).unwrap_or(0);
-            let v = if lock { flags | 128 } else { flags & !128 };
-            doc.update_dict(w.obj, |d| d.set(b"F".to_vec(), Object::Int(v)))?;
-        }
-        if *props == (FieldProps { locked: props.locked, ..FieldProps::default() }) {
-            return Ok(name.to_string());
-        }
+    // Locked and Form field are widget flags; a change of only those is done here.
+    if set_widget_flags(doc, &f, props)? {
+        return Ok(name.to_string());
     }
     if let Some(acts) = &props.actions {
         crate::set_field_actions(doc, name, acts)?;
@@ -394,6 +388,29 @@ fn set_props_target(doc: &mut Document, name: &str, object: Option<ObjRef>, prop
         crate::recalculate(doc)?;
     }
     Ok(new_name)
+}
+
+/// Lock or unlock every widget of `f`, and (Thai edition) show, hide or keep it off paper
+/// (General ▸ Form field). Returns whether `props` changes nothing else.
+fn set_widget_flags(doc: &mut Document, f: &Field, props: &FieldProps) -> Result<bool, FormError> {
+    if props.locked.is_none() && props.display.is_none() {
+        return Ok(false);
+    }
+    for w in &f.widgets {
+        let flags = doc.get(w.obj).as_dict().and_then(|d| d.get(b"F").and_then(|v| doc.resolve(v).as_int())).unwrap_or(0);
+        let mut new = match props.locked {
+            Some(true) => flags | 128,
+            Some(false) => flags & !128,
+            None => flags,
+        };
+        if let Some(display) = props.display {
+            new = display.flags(new);
+        }
+        if new != flags {
+            doc.update_dict(w.obj, |d| d.set(b"F".to_vec(), Object::Int(new)))?;
+        }
+    }
+    Ok(*props == (FieldProps { locked: props.locked, display: props.display, ..FieldProps::default() }))
 }
 
 /// Apply a new name from `props`: rename the field, move it under the parents a full name
