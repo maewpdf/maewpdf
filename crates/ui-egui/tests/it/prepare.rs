@@ -2331,3 +2331,23 @@ fn a_paste_of_the_copied_names_pastes_the_fields() {
     h.run_steps(4);
     assert!(names(&h).contains(&"city2".to_string()), "{:?}", names(&h));
 }
+
+/// Thai edition: in Prepare a form the Hand tool (and Space held) pans: a drag over the page
+/// boxes no fields, and one over a field doesn't move it.
+#[test]
+fn the_hand_tool_pans_without_boxing_or_moving_fields() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(3);
+    h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Hand;
+    h.run_steps(2);
+    let before = rect_of(&h, "city");
+    let (a, b) = (at(&h, 10.0, 10.0), at(&h, 290.0, 390.0));
+    drag(&mut h, a, b);
+    let prep = &h.state().views[0].prepare;
+    assert!(prep.selected.is_none() && prep.also.is_empty(), "nothing boxed: {:?} {:?}", prep.selected, prep.also);
+    let from = field_rect(&h, "city").center();
+    drag(&mut h, from, from + egui::vec2(0.0, 60.0));
+    assert_eq!(rect_of(&h, "city"), before, "the field stays");
+    assert!(h.state().views[0].prepare.selected.is_none());
+}

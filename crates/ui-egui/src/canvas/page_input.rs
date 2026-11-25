@@ -199,7 +199,8 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     let over_mark = matches!(tool, QuickTool::Fill(_))
         && (matches!(press, PagePress::Mine(_)) || comments::moving_on(view, i) || !ptr.any_down && hovered.is_some());
     tool_input(ui, view, frame, slot, &pcx, press, over_mark);
-    let on_field = if preparing && !placing {
+    // The Hand tool (held Space too) pans the page: no field is moved, drawn or boxed (Thai edition).
+    let on_field = if preparing && !placing && tool != QuickTool::Hand {
         let o = crate::prepare::page_input(cx, form, field_tool, prepare_allowed, press, view);
         frame.out.field_props |= o.properties;
         frame.out.field_placed |= o.placed;
@@ -668,7 +669,7 @@ impl PageHits<'_> {
         // A right-click reaches a Prepare field whatever the field tool, and while a table is set up,
         // on a document that can be changed.
         let (field_tool, prepare_allowed) = if context { (None, can_modify) } else { (field_tool, prepare_allowed) };
-        let fields = if preparing {
+        let fields = if preparing && tool != QuickTool::Hand {
             crate::prepare::hit(xf, info, page, form, field_tool, prepare_allowed, &view.prepare, p)
         } else if tool == QuickTool::Select {
             crate::forms_ui::hit(xf, info, page, form, tabs, can_fill, p)
