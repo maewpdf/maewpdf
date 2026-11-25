@@ -10,6 +10,10 @@ pub struct Look {
     pub style: BorderStyle,
     pub text: [f64; 3],
     pub font: FieldFont,
+    /// Thai edition: the font's bold and italic (the standard fonts' Bold and Oblique or Italic
+    /// faces; a family's own, or its nearest).
+    pub bold: bool,
+    pub italic: bool,
 }
 
 /// A partial Appearance-tab edit. Outer `None` keeps a property; `Some(None)` removes a
@@ -22,9 +26,17 @@ pub struct LookPatch {
     pub style: Option<BorderStyle>,
     pub text: Option<[f64; 3]>,
     pub font: Option<FieldFont>,
+    /// Thai edition: bold and italic on or off.
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
 }
 
 impl LookPatch {
+    /// Whether the patch changes the font: its family, bold or italic.
+    pub(crate) fn sets_font(&self) -> bool {
+        self.font.is_some() || self.bold.is_some() || self.italic.is_some()
+    }
+
     pub(super) fn validate(&self) -> Result<(), FormError> {
         for c in self.border.flatten().into_iter().chain(self.fill.flatten()).chain(self.text) {
             if !c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)) {
@@ -46,14 +58,18 @@ impl LookPatch {
 /// `face` is the `/DR` resource name written for a chosen face ([`FieldFont::Face`],
 /// [`super::tree::face_font`]); the standard fonts have names of their own.
 pub(super) fn patch_da(da: &str, size: Option<f64>, patch: &LookPatch, face: Option<&str>) -> String {
-    if patch.font.is_none() && size.is_none() && patch.text.is_none() {
+    if !patch.sets_font() && size.is_none() && patch.text.is_none() {
         return da.to_string();
     }
     let mut toks: Vec<String> = da.split_whitespace().map(str::to_string).collect();
     let numeric = |s: &str| s.parse::<f64>().is_ok();
-    if patch.font.is_some() || size.is_some() {
+    if patch.sets_font() || size.is_some() {
         let old = appearance::parse_da(da);
-        let font = patch.font.map_or_else(|| old.font.clone(), |f| f.resource(face).to_string());
+        let font = match (face, patch.font) {
+            (Some(resource), _) if patch.sets_font() => resource.to_string(),
+            (_, Some(f)) => f.resource(None).to_string(),
+            _ => old.font.clone(),
+        };
         // `parse_da` reads sizes up to 300 points; keep the same bound when writing.
         let size = appearance::fmt(size.unwrap_or(old.size).clamp(0.0, 300.0));
         let at = toks.iter().enumerate().rev().find(|(i, t)| t.as_str() == "Tf" && *i >= 2).map(|(i, _)| i);
@@ -186,15 +202,43 @@ impl FieldFont {
     /// The standard fonts, which every viewer has.
     pub const ALL: [FieldFont; 3] = [FieldFont::Helvetica, FieldFont::Times, FieldFont::Courier];
 
-    /// The `/DR` resource name: Acrobat's for the standard fonts, else `face` (the name written
-    /// for the chosen face), else Helvetica's.
+    /// The `/DR` resource name: `face`, the name written for the font in its style
+    /// ([`super::tree::face_font`], [`super::tree::standard_font`]), else Acrobat's for the
+    /// standard fonts' regular faces, else Helvetica's.
     fn resource(self, face: Option<&str>) -> &str {
+        if let Some(name) = face {
+            return name;
+        }
         match self {
-            FieldFont::Helvetica => "Helv",
+            FieldFont::Helvetica | FieldFont::Face(_) => "Helv",
             FieldFont::Times => "TiRo",
             FieldFont::Courier => "Cour",
-            FieldFont::Face(_) => face.unwrap_or("Helv"),
         }
+    }
+
+    /// Thai edition: a standard font's `/DR` name and base font in a style, as Acrobat names them
+    /// ("HeBo", Helvetica-Bold); `None` for a family.
+    pub(crate) fn standard(self, bold: bool, italic: bool) -> Option<(&'static str, &'static str)> {
+        let i = usize::from(bold) | usize::from(italic) << 1;
+        let table: [(&str, &str); 4] = match self {
+            FieldFont::Helvetica => {
+                [("Helv", "Helvetica"), ("HeBo", "Helvetica-Bold"), ("HeOb", "Helvetica-Oblique"), ("HeBO", "Helvetica-BoldOblique")]
+            }
+            FieldFont::Times => [("TiRo", "Times-Roman"), ("TiBo", "Times-Bold"), ("TiIt", "Times-Italic"), ("TiBI", "Times-BoldItalic")],
+            FieldFont::Courier => [("Cour", "Courier"), ("CoBo", "Courier-Bold"), ("CoOb", "Courier-Oblique"), ("CoBO", "Courier-BoldOblique")],
+            FieldFont::Face(_) => return None,
+        };
+        table.get(i).copied()
+    }
+
+    /// The standard font, bold and italic a `/DA` resource or base font name stands for.
+    fn of_standard(name: &str) -> Option<(FieldFont, bool, bool)> {
+        [FieldFont::Helvetica, FieldFont::Times, FieldFont::Courier].into_iter().find_map(|f| {
+            [(false, false), (true, false), (false, true), (true, true)].into_iter().find_map(|(b, i)| {
+                let (res, base) = f.standard(b, i)?;
+                (name == res || name == base).then_some((f, b, i))
+            })
+        })
     }
 
     pub fn label(self) -> &'static str {
@@ -293,6 +337,11 @@ pub fn look(doc: &Document, f: &Field) -> Look {
     let bs = wd.get(b"BS").and_then(|b| doc.resolve(b).as_dict().cloned()).unwrap_or_default();
     let da = wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).unwrap_or_else(|| f.da.clone());
     let parsed = appearance::parse_da(&da);
+    // A standard font by its resource or base name; a font written for a chosen face, when this
+    // build or this machine has it (Thai edition); else the field is drawn in Helvetica.
+    let (font, bold, italic) = FieldFont::of_standard(&parsed.font)
+        .or_else(|| crate::appearance::dr_face_style(doc, &parsed.font).map(|(family, bold, italic, _)| (FieldFont::Face(family), bold, italic)))
+        .unwrap_or((FieldFont::Helvetica, false, false));
     let nums: Vec<f64> = parsed.color.split_whitespace().filter_map(|t| t.parse().ok()).collect();
     let text = match nums.len() {
         1 => [nums[0]; 3],
@@ -312,13 +361,9 @@ pub fn look(doc: &Document, f: &Field) -> Look {
             _ => BorderStyle::Solid,
         },
         text,
-        font: match parsed.font.as_str() {
-            "TiRo" | "Times-Roman" => FieldFont::Times,
-            "Cour" | "Courier" => FieldFont::Courier,
-            // A font written for a chosen face, when this build or this machine has it (Thai
-            // edition); without it the field is drawn in Helvetica.
-            other => crate::appearance::dr_face_family(doc, other).map_or(FieldFont::Helvetica, |(family, _)| FieldFont::Face(family)),
-        },
+        font,
+        bold,
+        italic,
     }
 }
 

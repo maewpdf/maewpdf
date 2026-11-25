@@ -359,15 +359,21 @@ pub fn face_metrics(script: ShapedScript) -> Option<FaceMetrics> {
 /// the family records it. For a name read from a file, which is looked up and never used as a
 /// path.
 pub fn family_face(name: &str) -> Option<(&'static str, ShapedScript)> {
+    family_face_styled(name, false, false)
+}
+
+/// [`family_face`] in a style: its bold, italic or bold italic face, or the nearest the family
+/// has (the regular face when it has no other).
+pub fn family_face_styled(name: &str, bold: bool, italic: bool) -> Option<(&'static str, ShapedScript)> {
     let want = name.trim();
     if let Some(family) = crate::CRAFT_FONTS.iter().map(|f| f.family).find(|f| f.eq_ignore_ascii_case(want))
-        && let Some(face) = document_family_font(family, false, false)
+        && let Some(face) = document_family_font(family, bold, italic)
     {
         return Some((family, face));
     }
     let index = crate::installed_family(want)?;
     let family = crate::installed_families().get(usize::from(index))?;
-    Some((family.name, crate::installed_face(index, false, false)?))
+    Some((family.name, crate::installed_face(index, bold, italic)?))
 }
 
 #[cfg(test)]

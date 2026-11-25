@@ -386,6 +386,11 @@ fn dr_font(doc: &Document, name: &str) -> Option<(Object, FontText)> {
 /// this machine has; the name is never used as a path.
 pub(crate) const FACE_KEY: &[u8] = b"PCFamily";
 
+/// Thai edition: the keys marking a chosen face's font as written for its bold or italic style
+/// (`true`; absent is the regular style).
+pub(crate) const BOLD_KEY: &[u8] = b"PCBold";
+pub(crate) const ITALIC_KEY: &[u8] = b"PCItalic";
+
 /// Thai edition: the face the `/DR` font `name` was written for, when this build or this machine
 /// has it.
 fn dr_face(doc: &Document, name: &str) -> Option<pdfcraft_fonts::ShapedScript> {
@@ -394,12 +399,20 @@ fn dr_face(doc: &Document, name: &str) -> Option<pdfcraft_fonts::ShapedScript> {
 
 /// [`dr_face`] with the family's name as the family records it.
 pub(crate) fn dr_face_family(doc: &Document, name: &str) -> Option<(&'static str, pdfcraft_fonts::ShapedScript)> {
+    dr_face_style(doc, name).map(|(family, _, _, face)| (family, face))
+}
+
+/// [`dr_face_family`] with the style the font was written in: (family, bold, italic, face).
+pub(crate) fn dr_face_style(doc: &Document, name: &str) -> Option<(&'static str, bool, bool, pdfcraft_fonts::ShapedScript)> {
     let af = acroform(doc)?;
     let dr = doc.resolve(af.get(b"DR")?);
     let fonts = doc.resolve(dr.as_dict()?.get(b"Font")?);
     let font = doc.resolve(fonts.as_dict()?.get(name.as_bytes())?);
-    let family = doc.resolve(font.as_dict()?.get(FACE_KEY)?).as_string()?.to_text();
-    pdfcraft_fonts::family_face(&family)
+    let fd = font.as_dict()?;
+    let family = doc.resolve(fd.get(FACE_KEY)?).as_string()?.to_text();
+    let flag = |key: &[u8]| fd.get(key).map(|v| doc.resolve(v)).is_some_and(|v| matches!(*v, Object::Bool(true)));
+    let (bold, italic) = (flag(BOLD_KEY), flag(ITALIC_KEY));
+    pdfcraft_fonts::family_face_styled(&family, bold, italic).map(|(family, face)| (family, bold, italic, face))
 }
 
 /// [`dr_face`] for field `f`'s font `name`; none for a comb field, whose cells hold a character each.

@@ -7402,6 +7402,26 @@ fn a_form_field_is_copied_through_tools() {
     assert!(a.call("form_copy_field", &json!({ "doc": doc, "field": "R" })).is_err());
 }
 
+/// Thai edition: form_set_props takes bold and italic for a field's font, and refuses what isn't
+/// true or false.
+#[test]
+fn a_form_field_is_set_bold_through_tools() {
+    let dir = workdir("field-bold");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [10, 20, 200, 44], "name": "A" }));
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "A", "appearance": { "bold": true, "italic": true } }));
+    let f = ok(&mut a, "form_fields", json!({ "doc": doc }))["fields"][0].clone();
+    assert_eq!((f["bold"].clone(), f["italic"].clone()), (json!(true), json!(true)), "{f}");
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "A", "appearance": { "italic": false } }));
+    let f = ok(&mut a, "form_fields", json!({ "doc": doc }))["fields"][0].clone();
+    assert_eq!((f["bold"].clone(), f["italic"].clone()), (json!(true), json!(null)), "italic off keeps the bold: {f}");
+    match a.call("form_set_props", &json!({ "doc": doc, "field": "A", "appearance": { "bold": "yes" } })) {
+        Err(ToolError::InvalidArgs(m)) => assert!(m.contains("bold"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+}
+
 /// #7429: an import that took some values and had the form refuse another says which one in its own
 /// response (a CLI or MCP caller need not call `doc_info`); one the form refused whole still fails;
 /// one the form took whole carries an empty list.

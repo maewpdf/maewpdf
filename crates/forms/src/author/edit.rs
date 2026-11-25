@@ -119,11 +119,26 @@ pub(crate) fn set_props_object(doc: &mut Document, name: &str, object: ObjRef, p
     set_props_target(doc, name, Some(object), props)
 }
 
-/// Thai edition: the `/DR` name of the chosen face `props` sets, written into the form first.
-fn face_resource(doc: &mut Document, props: &FieldProps) -> Result<Option<String>, FormError> {
-    match props.look.map(|l| l.font).or(props.appearance.and_then(|p| p.font)) {
-        Some(FieldFont::Face(family)) => super::tree::face_font(doc, family).map(Some),
-        _ => Ok(None),
+/// Thai edition: the `/DR` name of the font, bold and italic `props` set on field `f`, written
+/// into the form first: a family's face ([`super::tree::face_font`]) or a standard font's style
+/// ([`super::tree::standard_font`]). A patch that changes only bold or italic keeps the field's
+/// font, and the other of the two. `None` when the font isn't changed.
+fn face_resource(doc: &mut Document, f: &Field, props: &FieldProps) -> Result<Option<String>, FormError> {
+    let (font, bold, italic) = match (&props.look, &props.appearance) {
+        (Some(l), _) => (l.font, l.bold, l.italic),
+        (None, Some(p)) if p.sets_font() => {
+            let now = super::look::look(doc, f);
+            (p.font.unwrap_or(now.font), p.bold.unwrap_or(now.bold), p.italic.unwrap_or(now.italic))
+        }
+        _ => return Ok(None),
+    };
+    match font {
+        FieldFont::Face(family) => super::tree::face_font(doc, family, bold, italic).map(Some),
+        standard => match standard.standard(bold, italic) {
+            Some((resource, base)) if bold || italic => super::tree::standard_font(doc, resource, base).map(Some),
+            Some((resource, _)) => Ok(Some(resource.to_string())),
+            None => Ok(None),
+        },
     }
 }
 
@@ -195,12 +210,12 @@ fn set_props_target(doc: &mut Document, name: &str, object: Option<ObjRef>, prop
     let size = props.font_size.unwrap_or_else(|| crate::appearance::parse_da(&f.da).size);
     // A chosen face's font is written into the form's /DR first (Thai edition), under the name
     // the /DA then uses.
-    let face = face_resource(doc, props)?;
+    let face = face_resource(doc, &f, props)?;
     let new_da = match &props.look {
         Some(l) => da_string(l.font, size, l.text, face.as_deref()),
         None => patch_da(&f.da, props.font_size, &props.appearance.unwrap_or_default(), face.as_deref()),
     };
-    if props.look.is_some() || props.appearance.is_some_and(|p| p.font.is_some()) {
+    if props.look.is_some() || props.appearance.is_some_and(|p| p.sets_font()) {
         ensure_form(doc)?;
     }
     let mut ff = f.flags;
@@ -306,7 +321,7 @@ fn set_props_target(doc: &mut Document, name: &str, object: Option<ObjRef>, prop
             }
             None => {}
         }
-        if props.font_size.is_some() || props.look.is_some() || props.appearance.is_some_and(|p| p.font.is_some() || p.text.is_some()) {
+        if props.font_size.is_some() || props.look.is_some() || props.appearance.is_some_and(|p| p.sets_font() || p.text.is_some()) {
             d.set(b"DA".to_vec(), PdfString::literal(new_da.clone().into_bytes()));
         }
     })?;
@@ -316,7 +331,7 @@ fn set_props_target(doc: &mut Document, name: &str, object: Option<ObjRef>, prop
             patch_widget_look(doc, w, patch)?;
             // A widget's own /DA overrides its field's /DA. Patch that override separately
             // rather than replacing its font or colour with the first widget's defaults.
-            if w.obj != f.obj && (props.font_size.is_some() || patch.font.is_some() || patch.text.is_some()) {
+            if w.obj != f.obj && (props.font_size.is_some() || patch.sets_font() || patch.text.is_some()) {
                 let da = doc
                     .get(w.obj)
                     .as_dict()

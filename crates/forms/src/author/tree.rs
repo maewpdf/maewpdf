@@ -49,8 +49,8 @@ pub(crate) fn ensure_form(doc: &mut Document) -> Result<ObjRef, FormError> {
 /// isn't embedded (ISO 32000-2 §9.6.3), so other viewers can stand a font in for it; PdfCraft
 /// draws the field from the face itself, found again by the family name under
 /// [`crate::appearance::FACE_KEY`]. A name a font of the form already has is never reused.
-pub(crate) fn face_font(doc: &mut Document, family: &str) -> Result<String, FormError> {
-    let Some((family, face)) = pdfcraft_fonts::family_face(family) else {
+pub(crate) fn face_font(doc: &mut Document, family: &str, bold: bool, italic: bool) -> Result<String, FormError> {
+    let Some((family, face)) = pdfcraft_fonts::family_face_styled(family, bold, italic) else {
         return Err(FormError::Invalid(format!(
             "the font \"{family}\" is not available: use Helvetica, Times Roman, Courier, TH Sarabun PSK or a font installed on this computer"
         )));
@@ -65,11 +65,24 @@ pub(crate) fn face_font(doc: &mut Document, family: &str) -> Result<String, Form
             .and_then(|d| d.get(crate::appearance::FACE_KEY).map(|v| doc.resolve(v)))
             .and_then(|v| v.as_string().map(|s| s.to_text()))
     };
-    if let Some((name, _)) = fonts.iter().find(|(_, v)| recorded(v).is_some_and(|f| f.eq_ignore_ascii_case(family))) {
+    // The style a /DR font was written in (Thai edition): its bold and italic flags, absent = off.
+    let styled = |o: &Object| {
+        let flag =
+            |key: &[u8]| doc.resolve(o).as_dict().and_then(|d| d.get(key).map(|v| doc.resolve(v))).is_some_and(|v| matches!(*v, Object::Bool(true)));
+        (flag(crate::appearance::BOLD_KEY), flag(crate::appearance::ITALIC_KEY))
+    };
+    if let Some((name, _)) = fonts.iter().find(|(_, v)| recorded(v).is_some_and(|f| f.eq_ignore_ascii_case(family)) && styled(v) == (bold, italic)) {
         return Ok(String::from_utf8_lossy(name).into_owned());
     }
-    let base: String = family.chars().filter(char::is_ascii_alphanumeric).collect();
-    let base = if base.is_empty() { "Face".to_string() } else { base };
+    let plain: String = family.chars().filter(char::is_ascii_alphanumeric).collect();
+    let plain = if plain.is_empty() { "Face".to_string() } else { plain };
+    let style = match (bold, italic) {
+        (false, false) => "",
+        (true, false) => "Bold",
+        (false, true) => "Italic",
+        (true, true) => "BoldItalic",
+    };
+    let base = format!("{plain}{style}");
     let mut name = format!("PC{base}");
     let mut suffix = 1usize;
     while fonts.contains(name.as_bytes()) {
@@ -80,29 +93,59 @@ pub(crate) fn face_font(doc: &mut Document, family: &str) -> Result<String, Form
     fd.set(b"Type".to_vec(), Object::name("FontDescriptor"));
     fd.set(b"FontName".to_vec(), Object::name(&base));
     // Nonsymbolic: its Latin characters are WinAnsi's.
-    fd.set(b"Flags".to_vec(), Object::Int(32));
+    // Nonsymbolic (32), and Italic (64) and ForceBold (1 << 18) as the style asks.
+    fd.set(b"Flags".to_vec(), Object::Int(32 | if italic { 64 } else { 0 } | if bold { 1 << 18 } else { 0 }));
     fd.set(b"FontBBox".to_vec(), Object::Array(metrics.bbox.iter().map(|v| Object::Real(*v)).collect()));
-    fd.set(b"ItalicAngle".to_vec(), Object::Int(0));
+    fd.set(b"ItalicAngle".to_vec(), Object::Int(if italic { -12 } else { 0 }));
     fd.set(b"Ascent".to_vec(), Object::Real(metrics.ascent));
     fd.set(b"Descent".to_vec(), Object::Real(metrics.descent));
     fd.set(b"CapHeight".to_vec(), Object::Real(metrics.cap_height));
-    fd.set(b"StemV".to_vec(), Object::Int(80));
+    fd.set(b"StemV".to_vec(), Object::Int(if bold { 140 } else { 80 }));
     let fd = doc.add(Object::Dict(fd));
     let mut font = Dict::new();
     font.set(b"Type".to_vec(), Object::name("Font"));
     font.set(b"Subtype".to_vec(), Object::name("TrueType"));
-    font.set(b"BaseFont".to_vec(), Object::name(&base));
+    // Other viewers stand a font in by this name: "Family,Bold" asks for the family's bold.
+    let shown = if style.is_empty() { plain.clone() } else { format!("{plain},{style}") };
+    font.set(b"BaseFont".to_vec(), Object::name(&shown));
     font.set(b"FirstChar".to_vec(), Object::Int(32));
     font.set(b"LastChar".to_vec(), Object::Int(255));
     font.set(b"Widths".to_vec(), Object::Array(metrics.widths.iter().map(|w| Object::Real(*w)).collect()));
     font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
     font.set(b"FontDescriptor".to_vec(), Object::Ref(fd));
     font.set(crate::appearance::FACE_KEY.to_vec(), PdfString::text(family));
+    if bold {
+        font.set(crate::appearance::BOLD_KEY.to_vec(), Object::Bool(true));
+    }
+    if italic {
+        font.set(crate::appearance::ITALIC_KEY.to_vec(), Object::Bool(true));
+    }
     let font = doc.add(Object::Dict(font));
     fonts.set(name.as_bytes().to_vec(), Object::Ref(font));
     store_form_fonts(doc, &mut af, dr, fonts);
     doc.set(r, Object::Dict(af));
     Ok(name)
+}
+
+/// Thai edition: the `/DR` name of a standard font in a style ("HeBo" for Helvetica-Bold, as
+/// Acrobat names them), written into the form first when it isn't there.
+pub(crate) fn standard_font(doc: &mut Document, resource: &str, base: &str) -> Result<String, FormError> {
+    let r = ensure_form(doc)?;
+    let mut af = doc.get(r).as_dict().cloned().unwrap_or_default();
+    let (dr, mut fonts) = form_fonts(doc, &af);
+    if fonts.get(resource.as_bytes()).is_some() {
+        return Ok(resource.to_string());
+    }
+    let mut font = Dict::new();
+    font.set(b"Type".to_vec(), Object::name("Font"));
+    font.set(b"Subtype".to_vec(), Object::name("Type1"));
+    font.set(b"BaseFont".to_vec(), Object::name(base));
+    font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+    let font = doc.add(Object::Dict(font));
+    fonts.set(resource.as_bytes().to_vec(), Object::Ref(font));
+    store_form_fonts(doc, &mut af, dr, fonts);
+    doc.set(r, Object::Dict(af));
+    Ok(resource.to_string())
 }
 
 /// The form dictionary's `/DR` and its `/Font` dictionary, resolved (empty where missing).

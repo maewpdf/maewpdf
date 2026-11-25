@@ -915,6 +915,8 @@ fn text_and_date_fields_keep_background_and_border_inside_marked_content() {
             style: BorderStyle::Solid,
             text: [0.0, 0.0, 0.0],
             font: FieldFont::Helvetica,
+            bold: false,
+            italic: false,
         }),
         ..FieldProps::default()
     };
@@ -2438,6 +2440,8 @@ fn appearance_properties_restyle_every_widget() {
         style: BorderStyle::Dashed,
         text: [0.0, 0.0, 1.0],
         font: FieldFont::Times,
+        bold: false,
+        italic: false,
     };
     set_props(&mut doc, "name", &FieldProps { look: Some(new), font_size: Some(14.0), ..FieldProps::default() }).unwrap();
     let doc = reopen(&doc);
@@ -2483,6 +2487,54 @@ fn thai_a_field_in_a_chosen_face_draws_all_its_text_from_it() {
     let widths = doc.resolve(font.get(b"Widths").unwrap()).as_array().map(|w| w.len());
     assert_eq!(widths, Some(224), "a width for each code 32-255");
     assert!(f.da.contains(&format!("/{}", String::from_utf8_lossy(faces[0].0))), "{}", f.da);
+}
+
+/// Thai edition: bold and italic for a field: a standard font's Bold, Oblique or Italic face under
+/// Acrobat's name for it, and a family's own bold face in a font of its own; a patch of italic
+/// alone keeps the bold, and the look reads both back.
+#[test]
+fn a_field_font_is_set_bold_and_italic() {
+    let mut doc = one_page();
+    add_field(&mut doc, 0, [50.0, 700.0, 300.0, 724.0], &NewField::Text { multiline: false }, Some("name")).unwrap();
+    let set =
+        |doc: &mut Document, patch: LookPatch| set_props(doc, "name", &FieldProps { appearance: Some(patch), ..FieldProps::default() }).unwrap();
+    set(&mut doc, LookPatch { bold: Some(true), ..LookPatch::default() });
+    let f = field(&fields(&doc), "name").clone();
+    assert!(f.da.contains("/HeBo "), "{}", f.da);
+    let l = look(&doc, &f);
+    assert_eq!((l.font, l.bold, l.italic), (FieldFont::Helvetica, true, false));
+    set(&mut doc, LookPatch { italic: Some(true), ..LookPatch::default() });
+    let f = field(&fields(&doc), "name").clone();
+    assert!(f.da.contains("/HeBO "), "italic keeps the bold: {}", f.da);
+    let af = crate::acroform(&doc).unwrap();
+    let dr = doc.resolve(af.get(b"DR").unwrap()).as_dict().cloned().unwrap();
+    let fonts = doc.resolve(dr.get(b"Font").unwrap()).as_dict().cloned().unwrap();
+    let base = |name: &[u8]| doc.resolve(fonts.get(name).unwrap()).as_dict().and_then(|d| d.name(b"BaseFont").map(<[u8]>::to_vec));
+    assert_eq!(base(b"HeBO"), Some(b"Helvetica-BoldOblique".to_vec()));
+    set(&mut doc, LookPatch { bold: Some(false), italic: Some(false), font: Some(FieldFont::Times), ..LookPatch::default() });
+    let f = field(&fields(&doc), "name").clone();
+    assert!(f.da.contains("/TiRo "), "{}", f.da);
+    let Some((family, _)) = pdfcraft_fonts::family_face("TH Sarabun PSK") else {
+        return; // built without craft-fonts
+    };
+    set(&mut doc, LookPatch { font: Some(FieldFont::Face(family)), bold: Some(true), ..LookPatch::default() });
+    set_value(&mut doc, "name", &FieldValue::Text("ผู้ใหญ่".into())).unwrap();
+    let doc = reopen(&doc);
+    let f = field(&fields(&doc), "name").clone();
+    let l = look(&doc, &f);
+    assert_eq!((l.font, l.bold, l.italic), (FieldFont::Face(family), true, false));
+    let af = crate::acroform(&doc).unwrap();
+    let dr = doc.resolve(af.get(b"DR").unwrap()).as_dict().cloned().unwrap();
+    let fonts = doc.resolve(dr.get(b"Font").unwrap()).as_dict().cloned().unwrap();
+    let bold = fonts
+        .iter()
+        .filter_map(|(_, v)| doc.resolve(v).as_dict().cloned())
+        .find(|d| d.contains(b"PCFamily") && d.contains(b"PCBold"))
+        .expect("a font for the family's bold");
+    assert!(bold.name(b"BaseFont").is_some_and(|b| b.ends_with(b",Bold")), "{bold:?}");
+    let regular = pdfcraft_fonts::family_face_styled(family, false, false).map(|(_, f)| f);
+    let heavy = pdfcraft_fonts::family_face_styled(family, true, false).map(|(_, f)| f);
+    assert_ne!(regular, heavy, "the family's own bold face draws it");
 }
 
 /// Thai edition: a font name for a field picks a standard font or a document family; a family
@@ -2531,8 +2583,16 @@ fn a_field_shows_and_prints_as_its_display_says() {
 fn a_copied_field_has_the_look_but_not_the_value() {
     let mut doc = one_page();
     add_field(&mut doc, 0, [50.0, 700.0, 300.0, 724.0], &NewField::Text { multiline: false }, Some("เชื้อชาติ")).unwrap();
-    let look =
-        Look { border: None, fill: Some([1.0, 1.0, 0.0]), width: 2.0, style: BorderStyle::Dashed, text: [1.0, 0.0, 0.0], font: FieldFont::Times };
+    let look = Look {
+        border: None,
+        fill: Some([1.0, 1.0, 0.0]),
+        width: 2.0,
+        style: BorderStyle::Dashed,
+        text: [1.0, 0.0, 0.0],
+        font: FieldFont::Times,
+        bold: false,
+        italic: false,
+    };
     let format = crate::af::Format::Number { decimals: 2, sep: 0, neg: 0, currency: String::new(), prepend: true };
     set_props(&mut doc, "เชื้อชาติ", &FieldProps { look: Some(look), format: Some(format.clone()), ..FieldProps::default() }).unwrap();
     crate::set_value(&mut doc, "เชื้อชาติ", &FieldValue::Text("12".into())).unwrap();
@@ -4246,6 +4306,8 @@ fn a_whole_look_keeps_the_rest_of_an_indirect_mk() {
         style: BorderStyle::Solid,
         text: [0.0; 3],
         font: FieldFont::Helvetica,
+        bold: false,
+        italic: false,
     };
     set_props(&mut doc, "agree", &FieldProps { look: Some(new), ..FieldProps::default() }).unwrap();
     let doc = reopen(&doc);

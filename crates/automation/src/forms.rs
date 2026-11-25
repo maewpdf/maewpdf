@@ -47,7 +47,7 @@ fn look_arg(v: &Value) -> Result<pdfcraft_engine::FieldLookPatch> {
     use pdfcraft_engine::{BorderStyle, FieldFont, FieldLookPatch};
     let o = v.as_object().ok_or_else(|| bad("appearance must be an object"))?;
     for key in o.keys() {
-        if !["border", "fill", "text_color", "width", "style", "font"].contains(&key.as_str()) {
+        if !["border", "fill", "text_color", "width", "style", "font", "bold", "italic"].contains(&key.as_str()) {
             return Err(bad(format!("unknown appearance property {key:?}")));
         }
     }
@@ -91,6 +91,9 @@ fn look_arg(v: &Value) -> Result<pdfcraft_engine::FieldLookPatch> {
                     .ok_or_else(|| bad(format!("unknown font {s:?} (helvetica, times, courier, sarabun, or an installed font's family name)")))
             })
             .transpose()?,
+        // Thai edition: the font's bold and italic.
+        bold: o.get("bold").map(|v| v.as_bool().ok_or_else(|| bad("appearance.bold must be true or false"))).transpose()?,
+        italic: o.get("italic").map(|v| v.as_bool().ok_or_else(|| bad("appearance.italic must be true or false"))).transpose()?,
     })
 }
 
@@ -328,6 +331,15 @@ impl Automation {
                 }
                 if let Some(s) = doc.field_check_style(&f.name) {
                     o.insert("check_style".into(), json!(s.label().to_lowercase()));
+                }
+                // Thai edition: a field's bold and italic, when on.
+                if let Some(look) = doc.field_look(&f.name).filter(|l| l.bold || l.italic) {
+                    if look.bold {
+                        o.insert("bold".into(), json!(true));
+                    }
+                    if look.italic {
+                        o.insert("italic".into(), json!(true));
+                    }
                 }
                 // Thai edition: only a field that isn't both shown and printed says so.
                 if let Some(d) = doc.field_display(&f.name).filter(|d| *d != pdfcraft_engine::FieldDisplay::Visible) {
